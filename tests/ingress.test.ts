@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Server } from "node:http";
+import { runInNewContext } from "node:vm";
 import { PairingStore } from "../src/security/pairing.js";
 import { loadPairings, startIngress } from "../src/ingress.js";
 import { generateOrRotateTlsIdentity } from "../src/security/tls.js";
@@ -40,7 +41,9 @@ describe("loopback ingress operations", () => {
       throw new Error("missing test address");
     expect(address.address).toBe("127.0.0.1");
     const base = `http://127.0.0.1:${address.port}`;
-    expect((await fetch(`${base}/`)).status).toBe(200);
+    const page = await fetch(`${base}/`);
+    expect(page.status).toBe(200);
+    await proveOperatorScript(await page.text());
     const cert = await fetch(`${base}/certificate`);
     expect(cert.headers.get("cache-control")).toContain("no-store");
     expect(cert.headers.get("content-disposition")).toContain("attachment");
@@ -90,3 +93,74 @@ describe("loopback ingress operations", () => {
     expect(address.address).toBe("0.0.0.0");
   });
 });
+async function proveOperatorScript(html: string) {
+  const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
+  if (!script) throw new Error("served operator script missing");
+  class FakeElement {
+    dataset: Record<string, string> = {};
+    textContent = "";
+    innerHTML = "";
+  }
+  const elements = new Map([
+    ["status", new FakeElement()],
+    ["clients", new FakeElement()],
+    ["secret", new FakeElement()],
+  ]);
+  let click: ((event: { target: unknown }) => Promise<void>) | undefined;
+  const calls: Array<{ path: string; init?: RequestInit }> = [];
+  const responses: Record<string, unknown> = {
+    health: { ok: true },
+    fingerprint: { fingerprint: "abc123" },
+    clients: { clients: [{ clientId: "client-a" }] },
+    pair: { credential: "one-time-secret", clientId: "client-b" },
+  };
+  const fetchLike = async (path: string, init?: RequestInit) => {
+    calls.push({ path, ...(init ? { init } : {}) });
+    return {
+      json: async () => responses[path],
+      headers: {
+        get: (name: string) =>
+          path === "pair" && name === "content-type"
+            ? "application/json"
+            : null,
+      },
+    };
+  };
+  runInNewContext(script, {
+    Element: FakeElement,
+    fetch: fetchLike,
+    alert: () => undefined,
+    document: {
+      getElementById: (id: string) => elements.get(id) ?? null,
+      addEventListener: (name: string, handler: typeof click) => {
+        if (name === "click") click = handler;
+      },
+    },
+  });
+  await waitFor(() => elements.get("status")?.textContent !== "");
+  expect(elements.get("status")?.textContent).toContain("Healthy: true");
+  expect(elements.get("clients")?.innerHTML).toContain("client-a");
+  if (!click) throw new Error("click handler missing");
+  await click({ target: {} });
+  expect(calls).toHaveLength(3);
+  const pair = new FakeElement();
+  pair.dataset.action = "pair";
+  await click({ target: pair });
+  expect(calls[3]).toMatchObject({
+    path: "pair",
+    init: { method: "POST", headers: { "x-ha-mcp-csrf": "1" } },
+  });
+  expect(elements.get("secret")?.textContent).toBe("one-time-secret");
+  expect(calls.slice(4).map((x) => x.path)).toEqual([
+    "health",
+    "fingerprint",
+    "clients",
+  ]);
+}
+async function waitFor(predicate: () => boolean) {
+  for (let i = 0; i < 50; i++) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("operator script did not settle");
+}

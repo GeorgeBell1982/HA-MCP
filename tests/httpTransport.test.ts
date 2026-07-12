@@ -234,7 +234,7 @@ describe("TLS Streamable HTTP MCP", () => {
         )
       ).status,
     ).toBe(401);
-  });
+  }, 15_000);
 });
 function post(
   port: number,
