@@ -1,5 +1,5 @@
 name: Home Assistant Engineering MCP
-version: "0.1.0"
+version: "0.1.1"
 slug: home_assistant_engineering_mcp
 description: Read-only, paired MCP engineering diagnostics for Home Assistant
 url: https://github.com/GeorgeBell1982/HA-MCP

@@ -6,7 +6,8 @@ shell, file, or Git capability.
 
 Direct MCP is off by default and requires ECDSA P-256 TLS with an IP/DNS SAN matching
 the external endpoint, a paired client, exact `Host`, no browser `Origin`, and no forwarding headers. The
-ingress listener is separate and loopback-only. Each client has a random 128-bit ID
+ingress listener is separate, binds the add-on container wildcard, has no published
+host port, and is reachable only across authenticated HA ingress. Each client has a random 128-bit ID
 and 256-bit secret; only salted scrypt hashes persist. Revocation and rotation are
 per-client. MCP sessions are owned by the authenticating client and limited per
 client; another client receives no session existence oracle.

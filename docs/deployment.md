@@ -19,8 +19,10 @@ The supported Phase 1 target is Home Assistant OS 18.1 on Raspberry Pi 5
    then set `enable_http: true` and restart the add-on.
 
 The wildcard is permitted only in verified add-on mode; the port remains unpublished (`null`) until explicitly configured, TLS/auth and exact Host checks remain mandatory, and local mode still rejects wildcard binds. The add-on requests only `homeassistant_api`. It has `map: []` and no Docker,
-privileged, host-network, or broad Supervisor access. Port 8099 listens only on
-loopback for authenticated HA ingress. Port 8443 is TLS-only MCP and is disabled by
+privileged, host-network, or broad Supervisor access. Inside the add-on container,
+port 8099 binds a wildcard so the Supervisor ingress proxy can reach it, but it has no
+host port mapping and is accessible only through authenticated Home Assistant ingress.
+Port 8443 is TLS-only MCP and is disabled by
 default. Plaintext non-loopback MCP, browser `Origin` requests, mismatched `Host`,
 and forwarded/proxied requests are rejected. Public and Cloudflare exposure is not
 supported.

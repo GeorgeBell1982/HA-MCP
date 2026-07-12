@@ -38,6 +38,7 @@ describe("loopback ingress operations", () => {
     const address = server.address();
     if (!address || typeof address === "string")
       throw new Error("missing test address");
+    expect(address.address).toBe("127.0.0.1");
     const base = `http://127.0.0.1:${address.port}`;
     expect((await fetch(`${base}/`)).status).toBe(200);
     const cert = await fetch(`${base}/certificate`);
@@ -73,5 +74,19 @@ describe("loopback ingress operations", () => {
       (await fetch(`${base}/revoke/${second.clientId}`, mutation)).status,
     ).toBe(204);
     expect(await store.authenticate(second.credential)).toBeUndefined();
+  });
+  it("binds the add-on listener to the internal wildcard when explicit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ingress-bind-"));
+    const server = await startIngress({
+      store: new PairingStore(),
+      path: join(root, "pairings.json"),
+      port: 0,
+      host: "0.0.0.0",
+    });
+    servers.push(server);
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("missing address");
+    expect(address.address).toBe("0.0.0.0");
   });
 });

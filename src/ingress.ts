@@ -37,6 +37,7 @@ export async function startIngress(options: {
   store: PairingStore;
   path: string;
   port?: number;
+  host?: string;
   tls?: {
     certPath: string;
     keyPath: string;
@@ -182,7 +183,7 @@ export async function startIngress(options: {
   );
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(options.port ?? 8099, "127.0.0.1", resolve);
+    server.listen(options.port ?? 8099, options.host ?? "127.0.0.1", resolve);
   });
   return server;
 }

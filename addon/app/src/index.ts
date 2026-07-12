@@ -33,6 +33,7 @@ if (config.mode === "addon") {
   await startIngress({
     store,
     path: pairingPath,
+    host: "0.0.0.0",
     tls: { certPath, keyPath, subjectAltName: san },
   });
   if (config.enableHttp)

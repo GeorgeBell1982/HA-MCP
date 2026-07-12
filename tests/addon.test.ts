@@ -9,6 +9,8 @@ describe("installable add-on packaging", () => {
     expect(manifest).toContain("homeassistant_api: true");
     expect(manifest).toContain("map: []");
     expect(manifest).toContain("enable_http: false");
+    expect(manifest).toContain("ingress_port: 8099");
+    expect(manifest).not.toContain("8099/tcp");
     for (const forbidden of [
       "config:rw",
       "privileged:",
