@@ -1,0 +1,37 @@
+# Home Assistant OS add-on deployment
+
+The supported Phase 1 target is Home Assistant OS 18.1 on Raspberry Pi 5
+(`aarch64`). No host shell is needed.
+
+1. Use the published add-on repository URL:
+   `https://github.com/GeorgeBell1982/HA-MCP`.
+2. In **Settings > Apps > App store > Repositories**, add that repository URL.
+3. Install **Home Assistant Engineering MCP**. Leave `enable_http: false`, start it,
+   and open its ingress panel. The operator page at `/` shows health, fingerprint,
+   and paired clients.
+4. Select **Pair new client**. Copy the displayed one-time credential immediately
+   into a local file readable only by your desktop account; the page does not persist
+   it and the add-on stores only scrypt material. Use the client buttons to rotate or
+   revoke individual credentials.
+5. Download the public certificate from the operator page and compare its displayed
+   SHA-256 fingerprint independently before copying it to the Codex computer.
+6. Keep the internal add-on `bind` at `0.0.0.0` so Supervisor port forwarding can reach it, set the matching external-LAN `allowed_host`, publish TCP 8443,
+   then set `enable_http: true` and restart the add-on.
+
+The wildcard is permitted only in verified add-on mode; the port remains unpublished (`null`) until explicitly configured, TLS/auth and exact Host checks remain mandatory, and local mode still rejects wildcard binds. The add-on requests only `homeassistant_api`. It has `map: []` and no Docker,
+privileged, host-network, or broad Supervisor access. Port 8099 listens only on
+loopback for authenticated HA ingress. Port 8443 is TLS-only MCP and is disabled by
+default. Plaintext non-loopback MCP, browser `Origin` requests, mismatched `Host`,
+and forwarded/proxied requests are rejected. Public and Cloudflare exposure is not
+supported.
+
+Certificate generation uses ECDSA P-256 and SHA-256 and stores key/certificate under
+`/data/tls` with umask 077. The ingress operator page displays the DER certificate
+fingerprint and provides the public certificate download. Its rotate-certificate
+button creates a replacement identity and reports its fingerprint.
+If replacement is interrupted, startup validates the key/certificate pair and safely
+regenerates mismatched state. Restart afterward and replace every bridge certificate
+and pin; the running listener retains its old in-memory identity until restart.
+
+Container execution on actual HA OS/aarch64 remains a deployment-time verification;
+the repository build and tests do not install or contact Home Assistant.

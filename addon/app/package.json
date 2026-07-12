@@ -1,0 +1,40 @@
+{
+  "name": "home-assistant-engineering-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "bin": {
+    "ha-engineering-mcp": "dist/index.js",
+    "ha-engineering": "dist/cli.js",
+    "ha-engineering-bridge": "dist/bridge.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:security": "vitest run tests/security.test.ts tests/addon.test.ts",
+    "test:mcp": "vitest run tests/mcp.test.ts",
+    "addon:context": "node addon/sync-context.mjs --check",
+    "verify": "pnpm addon:context && pnpm format:check && pnpm lint && pnpm typecheck && pnpm build && pnpm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.31.0",
+    "@types/node": "24.0.15",
+    "eslint": "9.31.0",
+    "prettier": "3.6.2",
+    "typescript": "5.8.3",
+    "typescript-eslint": "8.38.0",
+    "vitest": "3.2.4"
+  },
+  "packageManager": "pnpm@11.7.0"
+}
