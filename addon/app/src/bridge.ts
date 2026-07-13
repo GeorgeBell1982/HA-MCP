@@ -10,6 +10,11 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import {
+  closeStreamableHttpConnection,
+  RemoteSession,
+  type RemoteConnectionFactory,
+} from "./remoteSession.js";
 
 async function main() {
   const url = process.env.HA_MCP_URL;
@@ -32,15 +37,6 @@ async function main() {
   const bearer = (
     await readFile(credentialFile, { encoding: "utf8", flag: "r" })
   ).trim();
-  const transport = new StreamableHTTPClientTransport(new URL(url), {
-    requestInit: { headers: { Authorization: `Bearer ${bearer}` } },
-    reconnectionOptions: {
-      initialReconnectionDelay: 500,
-      maxReconnectionDelay: 5000,
-      reconnectionDelayGrowFactor: 2,
-      maxRetries: 3,
-    },
-  });
   // Node fetch does not expose the peer certificate. Refuse unless the operator has
   // supplied a pinned CA certificate whose DER hash is the expected identity.
   const caFile = process.env.HA_MCP_CA_FILE;
@@ -53,24 +49,45 @@ async function main() {
   const expected = Buffer.from(fingerprint, "hex");
   if (expected.length !== actual.length || !timingSafeEqual(actual, expected))
     throw new Error("Pinned certificate fingerprint mismatch");
-  const remote = new Client({
-    name: "ha-engineering-bridge",
-    version: "0.1.0",
-  });
   if (process.env.NODE_EXTRA_CA_CERTS !== caFile)
     throw new Error(
       "NODE_EXTRA_CA_CERTS must name the pinned CA file before bridge startup",
     );
-  await remote.connect(transport as unknown as Transport);
+  const createTransport = (sessionId?: string) =>
+    new StreamableHTTPClientTransport(new URL(url), {
+      requestInit: { headers: { Authorization: `Bearer ${bearer}` } },
+      reconnectionOptions: {
+        initialReconnectionDelay: 500,
+        maxReconnectionDelay: 5000,
+        reconnectionDelayGrowFactor: 2,
+        maxRetries: 3,
+      },
+      ...(sessionId ? { sessionId } : {}),
+    });
+  const remoteFactory: RemoteConnectionFactory<Client> = () => {
+    const transport = createTransport();
+    const client = new Client({
+      name: "ha-engineering-bridge",
+      version: "0.1.0",
+    });
+    return {
+      client,
+      transport,
+      connect: () => client.connect(transport as unknown as Transport),
+      close: () =>
+        closeStreamableHttpConnection(client, transport, createTransport),
+    };
+  };
+  const remote = await RemoteSession.connect(remoteFactory);
   const local = new Server(
     { name: "ha-engineering-bridge", version: "0.1.0" },
     { capabilities: { tools: {} } },
   );
   local.setRequestHandler(ListToolsRequestSchema, async () =>
-    remote.listTools(),
+    remote.run((client) => client.listTools()),
   );
   local.setRequestHandler(CallToolRequestSchema, async (request) =>
-    remote.callTool(request.params),
+    remote.run((client) => client.callTool(request.params)),
   );
   await local.connect(new StdioServerTransport());
 }

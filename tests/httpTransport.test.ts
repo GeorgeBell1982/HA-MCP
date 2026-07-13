@@ -1,8 +1,10 @@
 import { createServer as createNetServer } from "node:net";
 import { request } from "node:https";
+import { execFile } from "node:child_process";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Server } from "node:https";
 import type { ReadTools } from "../src/application.js";
@@ -13,6 +15,7 @@ import { certificateFingerprint } from "../src/security/tls.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 const servers: Server[] = [];
+const execFileAsync = promisify(execFile);
 afterEach(async () =>
   Promise.all(
     servers.splice(0).map((s) => new Promise<void>((r) => s.close(() => r()))),
@@ -46,15 +49,19 @@ describe("TLS Streamable HTTP MCP", () => {
     const a = await pairings.pair();
     const b = await pairings.pair();
     const port = await freePort();
+    let toolCalls = 0;
     const tools = {
       names: () => ["ha_get_system_info"],
-      call: async () => ({
-        ok: true,
-        requestId: "1",
-        data: {},
-        warnings: [],
-        evidence: [],
-      }),
+      call: async () => {
+        toolCalls++;
+        return {
+          ok: true,
+          requestId: "1",
+          data: {},
+          warnings: [],
+          evidence: [],
+        };
+      },
     } as unknown as ReadTools;
     const server = await startMcpHttps({
       bind: "127.0.0.1",
@@ -198,10 +205,13 @@ describe("TLS Streamable HTTP MCP", () => {
     expect((await client.listTools()).tools.map((x) => x.name)).toContain(
       "ha_get_system_info",
     );
+    // Wait beyond two idle sweeps so this exercises bridge recovery, not timing luck.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
     expect(
       (await client.callTool({ name: "ha_get_system_info", arguments: {} }))
         .isError,
     ).toBeFalsy();
+    expect(toolCalls).toBe(1);
     await client.close();
     const badBridge = new StdioClientTransport({
       command: process.execPath,
@@ -234,6 +244,102 @@ describe("TLS Streamable HTTP MCP", () => {
         )
       ).status,
     ).toBe(401);
+  }, 15_000);
+
+  it("reclaims a session allocated before client initialization fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "http-mcp-reclaim-"));
+    const certPath = join(root, "c.pem");
+    const keyPath = join(root, "k.pem");
+    await generateOrRotateTlsIdentity({
+      certPath,
+      keyPath,
+      openssl:
+        process.platform === "win32"
+          ? "C:/Program Files/Git/mingw64/bin/openssl.exe"
+          : "openssl",
+      subjectAltName: "IP:127.0.0.1",
+    });
+    const cert = await readFile(certPath, "utf8");
+    const key = await readFile(keyPath, "utf8");
+    const pairings = new PairingStore();
+    const pairing = await pairings.pair();
+    const port = await freePort();
+    const tools = {
+      names: () => ["ha_get_system_info"],
+      call: async () => ({
+        ok: true,
+        requestId: "1",
+        data: {},
+        warnings: [],
+        evidence: [],
+      }),
+    } as unknown as ReadTools;
+    const server = await startMcpHttps({
+      bind: "127.0.0.1",
+      port,
+      allowedHost: `127.0.0.1:${port}`,
+      certificate: cert,
+      privateKey: key,
+      pairings,
+      tools,
+      maxSessionsPerClient: 1,
+      maxSessionsGlobal: 1,
+    });
+    servers.push(server);
+
+    const script = `
+      import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+      import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+      import { closeStreamableHttpConnection } from "./dist/remoteSession.js";
+      const url = new URL(process.env.TEST_URL);
+      const bearer = process.env.TEST_BEARER;
+      const requestInit = { headers: { Authorization: "Bearer " + bearer } };
+      const reconnectionOptions = { initialReconnectionDelay: 10, maxReconnectionDelay: 10, reconnectionDelayGrowFactor: 1, maxRetries: 0 };
+      let failInitialized = true;
+      const failingFetch = async (input, init) => {
+        if (failInitialized && typeof init?.body === "string" && init.body.includes("notifications/initialized")) {
+          failInitialized = false;
+          return new Response("forced post-initialize failure", { status: 500, statusText: "forced" });
+        }
+        return fetch(input, init);
+      };
+      const createTransport = (sessionId, fetchOverride) => new StreamableHTTPClientTransport(url, {
+        requestInit,
+        reconnectionOptions,
+        ...(sessionId ? { sessionId } : {}),
+        ...(fetchOverride ? { fetch: fetchOverride } : {}),
+      });
+      const firstTransport = createTransport(undefined, failingFetch);
+      const firstClient = new Client({ name: "failed-candidate", version: "1" });
+      let failed = false;
+      try {
+        await firstClient.connect(firstTransport);
+      } catch {
+        failed = true;
+        await closeStreamableHttpConnection(firstClient, firstTransport, sessionId => createTransport(sessionId));
+      }
+      if (!failed) throw new Error("Expected post-initialize failure");
+      const replacementTransport = createTransport();
+      const replacementClient = new Client({ name: "replacement", version: "1" });
+      await replacementClient.connect(replacementTransport);
+      await closeStreamableHttpConnection(replacementClient, replacementTransport, sessionId => createTransport(sessionId));
+    `;
+    await expect(
+      execFileAsync(
+        process.execPath,
+        ["--input-type=module", "--eval", script],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            NODE_EXTRA_CA_CERTS: certPath,
+            TEST_URL: `https://127.0.0.1:${port}/mcp`,
+            TEST_BEARER: pairing.bearer,
+          },
+          timeout: 10_000,
+        },
+      ),
+    ).resolves.toBeDefined();
   }, 15_000);
 });
 function post(

@@ -18,5 +18,9 @@ arguments, URLs, or environment values. It applies bounded MCP reconnection. Res
 the credential file to the desktop user and rotate/revoke it from ingress if copied,
 lost, or exposed.
 
+If the add-on expires an otherwise authenticated HTTP session, the bridge creates a
+new pinned and authenticated session and retries the queued read-only request once.
+Authentication, rate-limit, TLS, network, and endpoint failures are not retried.
+
 Direct HTTP configuration is optional; local development can continue to use
 `dist/index.js` over stdio with a dedicated Home Assistant user/token.
