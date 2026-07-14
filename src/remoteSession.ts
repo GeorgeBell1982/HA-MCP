@@ -34,6 +34,8 @@ export async function closeStreamableHttpConnection(
 
 export class RemoteSession<Client> {
   private tail: Promise<void> = Promise.resolve();
+  private state: "open" | "closing" | "closed" = "open";
+  private closePromise?: Promise<void>;
 
   private constructor(
     private current: RemoteConnection<Client>,
@@ -54,12 +56,26 @@ export class RemoteSession<Client> {
   }
 
   run<Result>(operation: (client: Client) => Promise<Result>): Promise<Result> {
+    if (this.state !== "open")
+      return Promise.reject(new Error("Remote session is closing"));
     const result = this.tail.then(() => this.execute(operation));
     this.tail = result.then(
       () => undefined,
       () => undefined,
     );
     return result;
+  }
+
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.state = "closing";
+    this.closePromise = this.tail
+      .then(() => closeBestEffort(this.current))
+      .then(() => {
+        this.state = "closed";
+      });
+    this.tail = this.closePromise;
+    return this.closePromise;
   }
 
   private async execute<Result>(

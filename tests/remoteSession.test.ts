@@ -45,6 +45,40 @@ function connections(plans: ConnectionPlan[]) {
 const expired = () => new StreamableHTTPError(404, "expired session");
 
 describe("RemoteSession", () => {
+  it("waits for an in-flight operation, closes once, and rejects later work", async () => {
+    const setup = connections([{ sessionId: "current" }]);
+    const remote = await RemoteSession.connect(setup.factory);
+    let release!: () => void;
+    const operation = remote.run(
+      () => new Promise<string>((resolve) => (release = () => resolve("done"))),
+    );
+
+    const firstClose = remote.close();
+    const secondClose = remote.close();
+    expect(firstClose).toBe(secondClose);
+    expect(setup.counts().closed).toEqual([]);
+    await expect(remote.run(async () => "late")).rejects.toThrow(
+      "Remote session is closing",
+    );
+    release();
+    await expect(operation).resolves.toBe("done");
+    await expect(firstClose).resolves.toBeUndefined();
+    expect(setup.counts().closed).toEqual([0]);
+  });
+
+  it("closes after a rejected queued operation and contains close failure", async () => {
+    const setup = connections([
+      { sessionId: "current", closeError: new Error("close failed") },
+    ]);
+    const remote = await RemoteSession.connect(setup.factory);
+    const failure = new Error("operation failed");
+    await expect(remote.run(async () => Promise.reject(failure))).rejects.toBe(
+      failure,
+    );
+    await expect(remote.close()).resolves.toBeUndefined();
+    expect(setup.counts().closed).toEqual([0]);
+  });
+
   it("uses one connection and preserves strict FIFO operation order normally", async () => {
     const setup = connections([{ sessionId: "current" }]);
     const remote = await RemoteSession.connect(setup.factory);

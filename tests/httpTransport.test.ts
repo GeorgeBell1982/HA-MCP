@@ -341,6 +341,90 @@ describe("TLS Streamable HTTP MCP", () => {
       ),
     ).resolves.toBeDefined();
   }, 15_000);
+
+  it("releases a max-one HTTP session when a stdio client closes normally", async () => {
+    const root = await mkdtemp(join(tmpdir(), "http-mcp-bridge-close-"));
+    const certPath = join(root, "c.pem");
+    const keyPath = join(root, "k.pem");
+    await generateOrRotateTlsIdentity({
+      certPath,
+      keyPath,
+      openssl:
+        process.platform === "win32"
+          ? "C:/Program Files/Git/mingw64/bin/openssl.exe"
+          : "openssl",
+      subjectAltName: "IP:127.0.0.1",
+    });
+    const cert = await readFile(certPath, "utf8");
+    const key = await readFile(keyPath, "utf8");
+    const pairings = new PairingStore();
+    const pairing = await pairings.pair();
+    const credentialFile = join(root, "credential");
+    await writeFile(credentialFile, pairing.bearer, { mode: 0o600 });
+    await chmod(credentialFile, 0o600);
+    const port = await freePort();
+    const tools = {
+      names: () => ["ha_get_system_info"],
+      call: async () => ({
+        ok: true,
+        requestId: "1",
+        data: {},
+        warnings: [],
+        evidence: [],
+      }),
+    } as unknown as ReadTools;
+    const server = await startMcpHttps({
+      bind: "127.0.0.1",
+      port,
+      allowedHost: `127.0.0.1:${port}`,
+      certificate: cert,
+      privateKey: key,
+      pairings,
+      tools,
+      maxSessionsPerClient: 1,
+      maxSessionsGlobal: 1,
+    });
+    servers.push(server);
+    const env = {
+      ...Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      ),
+      HA_MCP_URL: `https://127.0.0.1:${port}/mcp`,
+      HA_MCP_CREDENTIAL_FILE: credentialFile,
+      HA_MCP_CA_FILE: certPath,
+      HA_MCP_CERT_SHA256: certificateFingerprint(cert),
+      NODE_EXTRA_CA_CERTS: certPath,
+    };
+
+    const firstTransport = new StdioClientTransport({
+      command: process.execPath,
+      args: [join(process.cwd(), "dist/bridge.js")],
+      env,
+      stderr: "pipe",
+    });
+    let stderr = "";
+    firstTransport.stderr?.on("data", (chunk) => (stderr += String(chunk)));
+    const firstClient = new Client({ name: "bridge-close-a", version: "1" });
+    await firstClient.connect(firstTransport);
+    expect((await firstClient.listTools()).tools).toHaveLength(1);
+    const started = Date.now();
+    await firstClient.close();
+    expect(Date.now() - started).toBeLessThan(1900);
+    expect(stderr).toBe("");
+
+    const secondTransport = new StdioClientTransport({
+      command: process.execPath,
+      args: [join(process.cwd(), "dist/bridge.js")],
+      env,
+      stderr: "pipe",
+    });
+    const secondClient = new Client({ name: "bridge-close-b", version: "1" });
+    await secondClient.connect(secondTransport);
+    expect((await secondClient.listTools()).tools).toHaveLength(1);
+    await secondClient.close();
+  }, 15_000);
 });
 function post(
   port: number,

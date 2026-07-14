@@ -21,6 +21,9 @@ lost, or exposed.
 If the add-on expires an otherwise authenticated HTTP session, the bridge creates a
 new pinned and authenticated session and retries the queued read-only request once.
 Authentication, rate-limit, TLS, network, and endpoint failures are not retried.
+Ending the bridge's stdin or stopping it with SIGINT/SIGTERM closes its authenticated
+HTTP session before exit. Shutdown is bounded so a stalled operation or remote close
+cannot leave the bridge process or server-side session indefinitely.
 
 Direct HTTP configuration is optional; local development can continue to use
 `dist/index.js` over stdio with a dedicated Home Assistant user/token.
