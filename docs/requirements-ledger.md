@@ -81,7 +81,7 @@ Cancellation is relevant for CLI/MCP requests before side effects; once an apply
 
 ## Validation plan
 
-Targeted: schema, policy, redaction, path, YAML, proposal, API, Git, and transaction tests. Full validation: format check, lint, `tsc --noEmit`, all non-E2E tests, package/build check, MCP smoke test, and security-focused suite. Environment: Ubuntu supported-adapter diagnostics and Docker HA E2E where practical. Clean room: required from Phase 1 onward because this is high-risk and cross-platform. The user authorized and completed the named Phase 1 read-only diagnostic recorded in [deployment.md](deployment.md). Deployed 0.1.4 recent-error and malformed-cursor checks failed; repository candidate 0.1.5 repairs remain `UNVERIFIED` live pending separately authorized deployment. Mutations remain prohibited.
+Targeted: schema, policy, redaction, path, YAML, proposal, API, Git, and transaction tests. Full validation: format check, lint, `tsc --noEmit`, all non-E2E tests, package/build check, MCP smoke test, and security-focused suite. Environment: Ubuntu supported-adapter diagnostics and Docker HA E2E where practical. Clean room: required from Phase 1 onward because this is high-risk and cross-platform. The user authorized and completed the named Phase 1 read-only diagnostics recorded in [deployment.md](deployment.md). Deployed 0.1.4 recent-error and malformed-cursor checks failed historically; installed 0.1.5 repaired both paths and passed the complete live acceptance matrix against Core 2026.7.2. Phase 1 live validation is `PASSED`. Mutations remain prohibited.
 
 ## Required human approvals
 

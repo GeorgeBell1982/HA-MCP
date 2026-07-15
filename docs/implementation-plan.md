@@ -18,7 +18,7 @@ Scaffold TypeScript package and add-on repository; strict compiler/lint/format/t
 
 Exit: stdio smoke test, mocked API integration, CLI tests, security gates, full verify, independent review, clean-room validation.
 
-Status (2026-07-15): deployed add-on 0.1.4 passed the read-only inventory, bridge, system, entity, automation, script, helper, scene, capability-refusal, schema, and shutdown checks. It failed recent-error retrieval and strict malformed-cursor rejection. Repository candidate 0.1.5 contains repairs and deterministic test coverage, but those behaviours are not live-verified. Phase 1 live closeout is `BLOCKED` pending an explicitly authorized 0.1.5 deployment and read-only retest; this status does not authorize deployment or mutation.
+Status (2026-07-15): deployed add-on 0.1.4 passed the read-only inventory, bridge, system, entity, automation, script, helper, scene, capability-refusal, schema, and shutdown checks, but failed recent-error retrieval and strict malformed-cursor rejection. Installed add-on 0.1.5 then passed both repaired paths and the complete read-only acceptance matrix against Core 2026.7.2; the bridge also recovered across the release. Phase 1 live closeout is `PASSED`. This status does not authorize mutation or any later-phase deployment.
 
 ## Phase 2: repository inspection and proposals
 
