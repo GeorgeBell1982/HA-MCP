@@ -3,6 +3,7 @@ import { JsonlAudit } from "./audit.js";
 import { ReadTools } from "./application.js";
 import { loadConfig } from "./config.js";
 import { HaRestClient } from "./ha/rest.js";
+import { deriveWebSocketUrl, HaWebSocketClient } from "./ha/websocket.js";
 import { runStdio } from "./transport/mcp.js";
 import { readFile } from "node:fs/promises";
 import { PairingStore } from "./security/pairing.js";
@@ -14,6 +15,7 @@ const audit = new JsonlAudit(config.auditPath);
 await audit.health();
 const tools = new ReadTools(
   new HaRestClient(config.baseUrl, config.token),
+  new HaWebSocketClient(deriveWebSocketUrl(config.baseUrl), config.token),
   audit,
 );
 if (config.mode === "addon") {

@@ -26,6 +26,7 @@ describe("diagnostic CLI", () => {
     expect(stderr).toBe("");
     expect(JSON.parse(stdout)).toMatchObject({
       restReads: true,
+      websocketReads: true,
       mutations: false,
       http: false,
     });

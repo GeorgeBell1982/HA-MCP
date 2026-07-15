@@ -35,5 +35,10 @@ If replacement is interrupted, startup validates the key/certificate pair and sa
 regenerates mismatched state. Restart afterward and replace every bridge certificate
 and pin; the running listener retains its old in-memory identity until restart.
 
-Container execution on actual HA OS/aarch64 remains a deployment-time verification;
-the repository build and tests do not install or contact Home Assistant.
+Repository builds and tests do not install or contact Home Assistant. Live acceptance is recorded separately below and never authorizes mutation or deployment.
+
+## Live acceptance record: 2026-07-15
+
+The deployed add-on was version 0.1.4 on the actual HA OS/aarch64 target with Core 2026.7.2. The read-only bridge discovered all 15 tools; direct bridge and registered Codex MCP system-information calls passed, and bridge shutdown exited cleanly. System information, entity pagination, entity search/state, automation/script/helper/scene reads, expected dashboard/blueprint capability refusals, schema limits, and the absence of mutation-like tools passed. All calls returned request IDs through the fail-closed audit middleware; the audit file was not independently inspected.
+
+Two deployed 0.1.4 checks failed: `ha_get_recent_errors` received a safe `upstream_error` from the nonexistent REST error-log route (HTTP 404), and malformed cursor `!!!` was accepted. Repository candidate 0.1.5 replaces that route with validated `system_log/list` WebSocket reads and requires canonical cursor encoding. Candidate 0.1.5 has not been deployed; both fixes remain `UNVERIFIED` live until an explicitly authorized add-on deployment and read-only retest.

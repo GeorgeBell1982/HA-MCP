@@ -44,28 +44,6 @@ describe("HA REST", () => {
     );
     await expect(client.states()).rejects.toThrow("state item was invalid");
   });
-  it("accepts only text/plain error logs", async () => {
-    const good = new HaRestClient(
-      new URL("https://ha.test/api"),
-      "x",
-      1000,
-      (async () =>
-        new Response("ERROR /api/webhook/canary", {
-          headers: { "content-type": "text/plain" },
-        })) as typeof fetch,
-    );
-    expect(await good.errors()).toContain("canary");
-    const bad = new HaRestClient(
-      new URL("https://ha.test/api"),
-      "x",
-      1000,
-      (async () =>
-        new Response("{}", {
-          headers: { "content-type": "application/json" },
-        })) as typeof fetch,
-    );
-    await expect(bad.errors()).rejects.toThrow("invalid content type");
-  });
   it("retries one safe 5xx read", async () => {
     let calls = 0;
     const client = new HaRestClient(
@@ -83,18 +61,6 @@ describe("HA REST", () => {
     );
     await client.config();
     expect(calls).toBe(2);
-  });
-  it("rejects declared oversized logs before consuming them", async () => {
-    const client = new HaRestClient(
-      new URL("https://ha.test/api"),
-      "x",
-      1000,
-      (async () =>
-        new Response("short", {
-          headers: { "content-type": "text/plain", "content-length": "600000" },
-        })) as typeof fetch,
-    );
-    await expect(client.errors()).rejects.toThrow("safe size limit");
   });
   it("normalizes config and rejects malformed consumed fields", async () => {
     const client = new HaRestClient(
@@ -114,17 +80,5 @@ describe("HA REST", () => {
     await expect(client.config()).rejects.toThrow(
       "config response was invalid",
     );
-  });
-  it("rejects malformed text logs", async () => {
-    const client = new HaRestClient(
-      new URL("https://ha.test/api"),
-      "x",
-      1000,
-      (async () =>
-        new Response("ERROR\0hidden", {
-          headers: { "content-type": "text/plain" },
-        })) as typeof fetch,
-    );
-    await expect(client.errors()).rejects.toThrow("was malformed");
   });
 });

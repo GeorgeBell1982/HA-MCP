@@ -26,11 +26,8 @@ export class HaRestClient {
     private readonly timeoutMs = 8_000,
     private readonly fetcher: typeof fetch = fetch,
   ) {}
-  private async get(
-    path: string,
-    options: { maxBytes?: number; contentType?: "json" | "text" } = {},
-  ): Promise<unknown> {
-    const maxBytes = options.maxBytes ?? 2_000_000;
+  private async get(path: string): Promise<unknown> {
+    const maxBytes = 2_000_000;
     if (!path.startsWith("/") || path.includes(".."))
       throw new SafeError("invalid_input", "Invalid Core API path");
     const target = new URL(this.base);
@@ -79,19 +76,6 @@ export class HaRestClient {
         ?.split(";")[0]
         ?.trim()
         .toLowerCase();
-      if (options.contentType === "text") {
-        if (mediaType && mediaType !== "text/plain")
-          throw new SafeError(
-            "upstream_error",
-            "Home Assistant error log response had an invalid content type",
-          );
-        if (text.includes("\0") || text.includes("\uFFFD"))
-          throw new SafeError(
-            "upstream_error",
-            "Home Assistant error log response was malformed",
-          );
-        return text;
-      }
       if (mediaType && mediaType !== "application/json")
         throw new SafeError(
           "upstream_error",
@@ -192,13 +176,6 @@ export class HaRestClient {
   async state(id: string): Promise<HaState> {
     const v = await this.get(`/states/${encodeURIComponent(id)}`);
     return validateState(v);
-  }
-  async errors(): Promise<string> {
-    const v = await this.get("/error_log", {
-      maxBytes: 512_000,
-      contentType: "text",
-    });
-    return typeof v === "string" ? v : JSON.stringify(v);
   }
 }
 

@@ -11,6 +11,9 @@ export interface ToolInput {
   limit?: number | undefined;
   cursor?: string | undefined;
 }
+export interface HaSystemLogClient {
+  systemLogEntries(): Promise<unknown>;
+}
 const unsupported = new Set([
   "ha_list_dashboards",
   "ha_get_dashboard",
@@ -57,6 +60,7 @@ const entityInputs: Record<string, z.ZodType<ToolInput>> = {
 export class ReadTools {
   constructor(
     private readonly ha: HaRestClient,
+    private readonly systemLog: HaSystemLogClient,
     private readonly audit: JsonlAudit,
   ) {}
   names(): string[] {
@@ -103,6 +107,7 @@ export class ReadTools {
         );
       const input = parsed.data as ToolInput;
       let data: unknown;
+      let evidence = "Home Assistant documented REST API";
       if (unsupported.has(name))
         throw new SafeError(
           "capability_unavailable",
@@ -118,9 +123,12 @@ export class ReadTools {
         if (!input.entityId)
           throw new SafeError("invalid_input", "entityId is required");
         data = await this.ha.state(input.entityId);
-      } else if (name === "ha_get_recent_errors")
-        data = summarizeErrors(await this.ha.errors());
-      else {
+      } else if (name === "ha_get_recent_errors") {
+        data = summarizeSystemLogEntries(
+          await this.systemLog.systemLogEntries(),
+        );
+        evidence = "Home Assistant system_log/list WebSocket API";
+      } else {
         const all = await this.ha.states();
         const wanted = domains[name];
         const query = input.query?.toLowerCase();
@@ -135,9 +143,7 @@ export class ReadTools {
         );
         data = paginate(matches, input);
       }
-      const result = success(requestId, redact(data), [
-        "Home Assistant documented REST API",
-      ]);
+      const result = success(requestId, redact(data), [evidence]);
       await this.audit.append({
         timestamp: new Date().toISOString(),
         tool: name,
@@ -165,11 +171,7 @@ export class ReadTools {
 }
 function paginate(states: HaState[], input: ToolInput) {
   const limit = Math.min(Math.max(input.limit ?? 100, 1), 500);
-  const offset = input.cursor
-    ? Number(Buffer.from(input.cursor, "base64url").toString("utf8"))
-    : 0;
-  if (!Number.isSafeInteger(offset) || offset < 0)
-    throw new SafeError("invalid_input", "Invalid cursor");
+  const offset = decodeCursor(input.cursor);
   const items = states.slice(offset, offset + limit);
   return {
     items,
@@ -182,15 +184,87 @@ function paginate(states: HaState[], input: ToolInput) {
     },
   };
 }
-export function summarizeErrors(raw: string) {
-  const cleaned = String(redact(raw))
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .slice(-50)
-    .map((line) => line.slice(0, 500));
-  return {
-    count: cleaned.length,
-    summaries: cleaned,
-    truncated: raw.split(/\r?\n/).length > 50,
-  };
+function decodeCursor(cursor: string | undefined): number {
+  if (cursor === undefined) return 0;
+  if (!/^[A-Za-z0-9_-]+$/.test(cursor))
+    throw new SafeError("invalid_input", "Invalid cursor");
+  const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+  if (!/^(0|[1-9]\d*)$/.test(decoded))
+    throw new SafeError("invalid_input", "Invalid cursor");
+  if (Buffer.from(decoded).toString("base64url") !== cursor)
+    throw new SafeError("invalid_input", "Invalid cursor");
+  const offset = Number(decoded);
+  if (!Number.isSafeInteger(offset))
+    throw new SafeError("invalid_input", "Invalid cursor");
+  return offset;
+}
+
+export function summarizeSystemLogEntries(raw: unknown) {
+  if (!Array.isArray(raw))
+    throw new SafeError(
+      "upstream_error",
+      "Home Assistant system log response was invalid",
+    );
+  const summaries = raw.slice(0, 50).map((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      throw new SafeError(
+        "upstream_error",
+        "Home Assistant system log response was invalid",
+      );
+    const entry = value as Record<string, unknown>;
+    if (
+      typeof entry.name !== "string" ||
+      !Array.isArray(entry.message) ||
+      entry.message.length > 5 ||
+      !entry.message.every((message) => typeof message === "string") ||
+      typeof entry.level !== "string" ||
+      !Array.isArray(entry.source) ||
+      entry.source.length !== 2 ||
+      typeof entry.source[0] !== "string" ||
+      !Number.isSafeInteger(entry.source[1]) ||
+      (entry.source[1] as number) < 0 ||
+      !Number.isSafeInteger(entry.count) ||
+      (entry.count as number) < 1
+    )
+      throw new SafeError(
+        "upstream_error",
+        "Home Assistant system log response was invalid",
+      );
+    const timestamp = normalizeTimestamp(entry.timestamp);
+    const firstOccurred = normalizeTimestamp(entry.first_occurred);
+    return {
+      name: entry.name.slice(0, 200),
+      messages: entry.message.map((message) => message.slice(0, 500)),
+      level: entry.level.slice(0, 50),
+      source: entry.source[0].slice(0, 500) + ":" + entry.source[1],
+      timestamp,
+      firstOccurred,
+      count: entry.count,
+    };
+  });
+  return { count: summaries.length, summaries, truncated: raw.length > 50 };
+}
+
+function normalizeTimestamp(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value))
+    throw new SafeError(
+      "upstream_error",
+      "Home Assistant system log response was invalid",
+    );
+  const milliseconds = value * 1000;
+  if (
+    !Number.isFinite(milliseconds) ||
+    Math.abs(milliseconds) > 8_640_000_000_000_000
+  )
+    throw new SafeError(
+      "upstream_error",
+      "Home Assistant system log response was invalid",
+    );
+  const date = new Date(milliseconds);
+  if (Number.isNaN(date.getTime()))
+    throw new SafeError(
+      "upstream_error",
+      "Home Assistant system log response was invalid",
+    );
+  return date.toISOString();
 }

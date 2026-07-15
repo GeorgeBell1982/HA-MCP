@@ -119,11 +119,22 @@ describe("security", () => {
     });
     expect(await readFile(path, "utf8")).not.toContain("canary");
   });
-  it("bounds and redacts multiline error summaries", async () => {
-    const { summarizeErrors } = await import("../src/application.js");
-    const result = summarizeErrors(
-      `${"old\n".repeat(60)}https://u:p@ha/api/webhook/canary\nBearer tokenvalue`,
-    );
+  it("bounds and redacts structured error summaries", async () => {
+    const { summarizeSystemLogEntries } = await import("../src/application.js");
+    const entries = Array.from({ length: 51 }, () => ({
+      name: "component",
+      message: ["https://u:p@ha/api/webhook/canary", "Bearer tokenvalue"],
+      level: "ERROR",
+      source: ["file.py", 1],
+      timestamp: 1_700_000_000,
+      first_occurred: 1_700_000_000,
+      count: 1,
+      exception: "password=exception-canary",
+    }));
+    const result = redact(summarizeSystemLogEntries(entries)) as {
+      count: number;
+      truncated: boolean;
+    };
     expect(result.count).toBe(50);
     expect(result.truncated).toBe(true);
     expect(JSON.stringify(result)).not.toContain("canary");

@@ -25,14 +25,18 @@ const ha = {
   }),
   errors: async () => "ERROR password=canary",
 } as unknown as HaRestClient;
+const systemLog = { systemLogEntries: async () => [] };
 describe("read tools", () => {
   it("paginates and filters", async () => {
     const audit = new JsonlAudit(
       join(await mkdtemp(join(tmpdir(), "tools-")), "a.jsonl"),
     );
-    const result = await new ReadTools(ha, audit).call("ha_list_automations", {
-      limit: 1,
-    });
+    const result = await new ReadTools(ha, systemLog, audit).call(
+      "ha_list_automations",
+      {
+        limit: 1,
+      },
+    );
     expect(result.ok).toBe(true);
     expect(JSON.stringify(result)).toContain("automation.test");
   });
@@ -40,7 +44,7 @@ describe("read tools", () => {
     const audit = new JsonlAudit(
       join(await mkdtemp(join(tmpdir(), "tools-")), "a.jsonl"),
     );
-    const result = await new ReadTools(ha, audit).call(
+    const result = await new ReadTools(ha, systemLog, audit).call(
       "ha_list_dashboards",
       {},
     );
@@ -49,7 +53,7 @@ describe("read tools", () => {
   it("audits schema and wrong-domain failures", async () => {
     const root = await mkdtemp(join(tmpdir(), "tools-"));
     const path = join(root, "a.jsonl");
-    const tools = new ReadTools(ha, new JsonlAudit(path));
+    const tools = new ReadTools(ha, systemLog, new JsonlAudit(path));
     expect(
       (await tools.call("ha_get_script", { entityId: "automation.wrong" }))
         .error?.code,

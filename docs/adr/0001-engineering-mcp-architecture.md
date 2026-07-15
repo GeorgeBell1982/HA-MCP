@@ -11,7 +11,7 @@ The server must complement the official Home Assistant MCP, safely bridge live A
 Primary-source findings:
 
 - The official MCP TypeScript SDK main branch is v2 beta against the 2026-07-28 specification. Its maintainers state that v1.x remains the production-supported release until v2 stabilizes. Phase 1 should therefore pin a current audited v1.x `@modelcontextprotocol/sdk` release; exact package/version is selected and lockfile-recorded at implementation time, not inferred from the v2 README.
-- Home Assistant REST is JSON over the frontend port, bearer-authenticated, and documents `/api/config`, `/api/states`, `/api/services`, `/api/error_log`, and `POST /api/config/core/check_config`.
+- Home Assistant REST is JSON over the frontend port, bearer-authenticated, and documents `/api/config`, `/api/states`, `/api/services`, and `POST /api/config/core/check_config`; Core 2026.7.2 exposes recent system-log entries through the authenticated WebSocket command `system_log/list`.
 - Home Assistant WebSocket at `/api/websocket` has explicit auth and correlation phases, supports event subscription and service commands, and is appropriate for post-reload verification.
 - Home Assistant documents that configuration access and validation vary by installation type, and most configuration should be reloaded without restart where supported.
 
@@ -58,19 +58,19 @@ MCP arguments cannot prove human intent. Phase 3 therefore introduces an `Approv
 
 ## API versus repository ownership
 
-- Use documented REST/WebSocket interfaces for live state, supported check-config, service catalog, error log, reload calls, and event-based verification.
+- Use documented REST/WebSocket interfaces for live state, supported check-config, service catalog, recent-error summaries, reload calls, and event-based verification.
 - Use a repository adapter only for resources actually backed by accessible YAML/config files.
 - UI-storage dashboards/helpers/automations must use an officially supported API/adapter where available. Do not edit `.storage` as a generic shortcut. Unsupported resource mutations remain unavailable.
 - Do not expose a generic service-call tool. Register only explicit allowlisted reload/restart operations with policy metadata.
 
 ## First-target capability matrix
 
-The actual target is Home Assistant OS 18.1 on Raspberry Pi 5 (`aarch64`), Core 2026.7.1, Supervisor 2026.06.2, config directory `/config`, with storage-mode dashboards. The user selected a purpose-built Home Assistant add-on. The core server therefore runs inside the managed add-on container; Codex connects using authenticated Streamable HTTP when supported or a small local stdio bridge.
+The actual target is Home Assistant OS 18.1 on Raspberry Pi 5 (`aarch64`), Core 2026.7.2, Supervisor 2026.06.2, config directory `/config`, with storage-mode dashboards. The user selected a purpose-built Home Assistant add-on. The core server therefore runs inside the managed add-on container; Codex connects using authenticated Streamable HTTP when supported or a small local stdio bridge.
 
 | Capability                                                     | Initial source                                                 | Status before access provisioning                                                                                                                                          |
 | -------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Entity/config metadata, states, services, errors, check-config | Authenticated documented HA REST API                           | Feasible for Phase 1, subject to endpoint/token setup.                                                                                                                     |
-| Events and reload verification                                 | Authenticated HA WebSocket API                                 | Feasible for Phase 1/3, subject to endpoint/token setup.                                                                                                                   |
+| Entity/config metadata, states, services, check-config         | Authenticated documented HA REST API                           | Feasible for Phase 1, subject to endpoint/token setup.                                                                                                                     |
+| Recent errors (`system_log/list`), events, reload verification | Authenticated HA WebSocket API                                 | Recent errors are Phase 1; events and reload verification are Phase 3, subject to endpoint/token setup.                                                                    |
 | `/config` reads/search/proposals                               | Add-on `/config` mapping with explicit access mode             | No Phase 1 mapping. Add read-only mapping only in Phase 2 after path/secret-source security gates; write mapping requires a later Phase 3 packaging revision and approval. |
 | Storage-mode dashboards                                        | Supported HA API only                                          | Read capability must be verified; direct `.storage` editing prohibited. Mutation remains unavailable until a supported interface is proven.                                |
 | HA validation                                                  | REST `POST /api/config/core/check_config` first                | Feasible; Supervisor/CLI fallback is not assumed.                                                                                                                          |

@@ -1,5 +1,8 @@
 import { SafeError } from "../domain.js";
+
 export const CORE_PROXY_WS_URL = "ws://supervisor/core/websocket";
+const MAX_MESSAGE_BYTES = 512_000;
+
 export function deriveWebSocketUrl(base: URL): URL {
   if (base.href === "http://supervisor/core/api")
     return new URL(CORE_PROXY_WS_URL);
@@ -8,35 +11,52 @@ export function deriveWebSocketUrl(base: URL): URL {
   result.pathname = result.pathname.replace(/\/api\/?$/, "") + "/api/websocket";
   return result;
 }
+
 type SocketFactory = (url: string) => WebSocket;
+
 export class HaWebSocketClient {
-  private socket?: WebSocket;
+  private socket: WebSocket | undefined;
+  private authenticated = false;
+  private connectPromise: Promise<void> | undefined;
   private nextId = 1;
   private pending = new Map<
     number,
     {
-      resolve: (v: unknown) => void;
-      reject: (e: Error) => void;
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
       timer: NodeJS.Timeout;
     }
   >();
+
   constructor(
     private readonly url: URL,
     private readonly token: string,
     private readonly timeoutMs = 8000,
-    private readonly factory: SocketFactory = (u) => new WebSocket(u),
+    private readonly factory: SocketFactory = (url) => new WebSocket(url),
   ) {}
-  async connect(retries = 2): Promise<void> {
+
+  connect(retries = 2): Promise<void> {
+    if (this.authenticated && this.socket?.readyState === WebSocket.OPEN)
+      return Promise.resolve();
+    if (this.connectPromise) return this.connectPromise;
+    const connecting = this.connectWithRetries(retries).finally(() => {
+      if (this.connectPromise === connecting) this.connectPromise = undefined;
+    });
+    this.connectPromise = connecting;
+    return connecting;
+  }
+
+  private async connectWithRetries(retries: number): Promise<void> {
     let last: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         await this.connectOnce();
         return;
-      } catch (e) {
-        last = e;
+      } catch (error) {
+        last = error;
         if (attempt < retries)
-          await new Promise((r) =>
-            setTimeout(r, Math.min(250 * 2 ** attempt, 1000)),
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(250 * 2 ** attempt, 1000)),
           );
       }
     }
@@ -44,68 +64,112 @@ export class HaWebSocketClient {
       ? last
       : new SafeError("upstream_error", "WebSocket connection failed");
   }
-  private connectOnce() {
-    return new Promise<void>((resolve, reject) => {
+
+  private connectOnce(): Promise<void> {
+    return new Promise((resolve, reject) => {
       const ws = this.factory(this.url.href);
       this.socket = ws;
+      this.authenticated = false;
+      let settled = false;
       const timer = setTimeout(() => {
-        ws.close();
-        reject(new SafeError("timeout", "WebSocket authentication timed out"));
+        fail(new SafeError("timeout", "WebSocket authentication timed out"));
       }, this.timeoutMs);
-      ws.onmessage = (event) => {
-        let msg: Record<string, unknown>;
+
+      const settleFailure = (error: SafeError) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      };
+      const fail = (error: SafeError) => {
+        settleFailure(error);
+        if (this.socket === ws) this.rejectPending(error);
         try {
-          const parsed: unknown = JSON.parse(String(event.data));
+          ws.close();
+        } catch {
+          // Preserve the original safe failure.
+        }
+      };
+
+      ws.onmessage = (event) => {
+        if (this.socket !== ws) return;
+        if (typeof event.data !== "string") {
+          fail(
+            new SafeError("upstream_error", "WebSocket response was invalid"),
+          );
+          return;
+        }
+        if (Buffer.byteLength(event.data, "utf8") > MAX_MESSAGE_BYTES) {
+          fail(
+            new SafeError(
+              "upstream_error",
+              "Home Assistant WebSocket response exceeded the safe size limit",
+            ),
+          );
+          return;
+        }
+        let message: Record<string, unknown>;
+        try {
+          const parsed: unknown = JSON.parse(event.data);
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
             return;
-          msg = parsed as Record<string, unknown>;
+          message = parsed as Record<string, unknown>;
         } catch {
           return;
         }
-        if (msg.type === "auth_required")
+        if (message.type === "auth_required")
           ws.send(JSON.stringify({ type: "auth", access_token: this.token }));
-        else if (msg.type === "auth_ok") {
+        else if (message.type === "auth_ok") {
+          if (this.socket !== ws) return;
+          settled = true;
           clearTimeout(timer);
+          this.authenticated = true;
           resolve();
-        } else if (msg.type === "auth_invalid") {
-          clearTimeout(timer);
-          reject(
+        } else if (message.type === "auth_invalid") {
+          fail(
             new SafeError(
               "auth_failed",
               "Home Assistant WebSocket authentication failed",
             ),
           );
-        } else if (typeof msg.id === "number") {
-          const p = this.pending.get(msg.id);
-          if (p) {
-            clearTimeout(p.timer);
-            this.pending.delete(msg.id);
-            if (msg.success === false)
-              p.reject(
-                new SafeError(
-                  "upstream_error",
-                  "Home Assistant WebSocket command failed",
-                ),
-              );
-            else p.resolve(msg.result);
-          }
+        } else if (typeof message.id === "number") {
+          const pending = this.pending.get(message.id);
+          if (!pending) return;
+          clearTimeout(pending.timer);
+          this.pending.delete(message.id);
+          if (message.success === false)
+            pending.reject(
+              new SafeError(
+                "upstream_error",
+                "Home Assistant WebSocket command failed",
+              ),
+            );
+          else pending.resolve(message.result);
         }
       };
       ws.onerror = () => {
-        clearTimeout(timer);
-        reject(new SafeError("upstream_error", "WebSocket connection failed"));
+        if (this.socket !== ws) return;
+        fail(new SafeError("upstream_error", "WebSocket connection failed"));
       };
       ws.onclose = () => {
-        for (const p of this.pending.values()) {
-          clearTimeout(p.timer);
-          p.reject(new SafeError("upstream_error", "WebSocket disconnected"));
+        const isCurrent = this.socket === ws;
+        if (isCurrent) {
+          this.socket = undefined;
+          this.authenticated = false;
         }
-        this.pending.clear();
+        const error = new SafeError("upstream_error", "WebSocket disconnected");
+        settleFailure(error);
+        if (isCurrent) this.rejectPending(error);
       };
     });
   }
+
   request(type: string, input: Record<string, unknown> = {}): Promise<unknown> {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN)
+    if (
+      !this.authenticated ||
+      !this.socket ||
+      this.socket.readyState !== WebSocket.OPEN
+    )
       return Promise.reject(
         new SafeError("capability_unavailable", "WebSocket is not connected"),
       );
@@ -119,7 +183,21 @@ export class HaWebSocketClient {
       this.socket!.send(JSON.stringify({ id, type, ...input }));
     });
   }
-  close() {
+
+  async systemLogEntries(): Promise<unknown> {
+    await this.connect();
+    return this.request("system_log/list");
+  }
+
+  close(): void {
     this.socket?.close();
+  }
+
+  private rejectPending(error: SafeError): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
   }
 }

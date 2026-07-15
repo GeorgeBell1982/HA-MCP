@@ -18,7 +18,7 @@ Source: https://github.com/modelcontextprotocol/typescript-sdk
 
 ## Home Assistant interfaces
 
-Official REST documentation confirms bearer authentication and documented endpoints including config, components, services, states, error log, service calls, and check-config. Official WebSocket documentation confirms `/api/websocket`, authentication phases, command correlation, subscriptions, and service commands. Configuration documentation confirms config access/validation varies by installation type and recommends reload over restart where supported.
+Official REST documentation confirms bearer authentication and documented endpoints including config, components, services, states, service calls, and check-config. Official WebSocket documentation confirms `/api/websocket`, authentication phases, command correlation, subscriptions, and service commands; Core 2026.7.2 registers the admin-only `system_log/list` WebSocket command for recent system-log entries. Configuration documentation confirms config access/validation varies by installation type and recommends reload over restart where supported.
 
 Sources:
 

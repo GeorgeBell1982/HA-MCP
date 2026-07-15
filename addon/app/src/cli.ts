@@ -12,7 +12,7 @@ async function main() {
   if (command === "list-capabilities")
     return {
       restReads: true,
-      websocketReads: false,
+      websocketReads: true,
       configRepository: false,
       git: false,
       mutations: false,

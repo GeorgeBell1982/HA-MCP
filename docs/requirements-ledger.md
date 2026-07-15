@@ -1,6 +1,6 @@
 # Requirements ledger
 
-Status: planning contract, 2026-07-11
+Status: Phase 1 validation contract, updated 2026-07-15
 
 ## Objective
 
@@ -56,9 +56,9 @@ Public contracts: MCP tool names/input/output schemas; environment variable name
 - Direct filesystem access is a negotiated capability, not an assumption.
 - API-managed resources and YAML-managed resources require separate repository adapters.
 - `secrets.yaml` and configured/renamed secret-source files are categorically content-inaccessible through MCP. Their canonical identities, aliases, includes, and symlinks are tracked so alternate paths cannot bypass the rule.
-- The actual target is Home Assistant OS 18.1 on Raspberry Pi 5 (`aarch64`), Core 2026.7.1, Supervisor 2026.06.2, with add-on-mapped `/config` and storage-mode dashboards.
+- The actual target is Home Assistant OS 18.1 on Raspberry Pi 5 (`aarch64`), Core 2026.7.2, Supervisor 2026.06.2, with add-on-mapped `/config` and storage-mode dashboards.
 - Home Assistant OS is not treated as a general-purpose Node host. The server is packaged as a least-privilege managed add-on; no direct OS access is required.
-- The repository is empty and has no baseline validation command yet.
+- The repository's authoritative deterministic validation command is `pnpm verify`.
 
 ## Behavioural matrix
 
@@ -81,7 +81,7 @@ Cancellation is relevant for CLI/MCP requests before side effects; once an apply
 
 ## Validation plan
 
-Targeted: schema, policy, redaction, path, YAML, proposal, API, Git, and transaction tests. Full validation: format check, lint, `tsc --noEmit`, all non-E2E tests, package/build check, MCP smoke test, and security-focused suite. Environment: Ubuntu supported-adapter diagnostics and Docker HA E2E where practical. Clean room: required from Phase 1 onward because this is high-risk and cross-platform. Production checks remain `UNVERIFIED` until the user explicitly authorizes a named, read-only environment diagnostic; mutations remain prohibited.
+Targeted: schema, policy, redaction, path, YAML, proposal, API, Git, and transaction tests. Full validation: format check, lint, `tsc --noEmit`, all non-E2E tests, package/build check, MCP smoke test, and security-focused suite. Environment: Ubuntu supported-adapter diagnostics and Docker HA E2E where practical. Clean room: required from Phase 1 onward because this is high-risk and cross-platform. The user authorized and completed the named Phase 1 read-only diagnostic recorded in [deployment.md](deployment.md). Deployed 0.1.4 recent-error and malformed-cursor checks failed; repository candidate 0.1.5 repairs remain `UNVERIFIED` live pending separately authorized deployment. Mutations remain prohibited.
 
 ## Required human approvals
 

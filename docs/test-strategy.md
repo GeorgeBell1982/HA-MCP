@@ -17,7 +17,7 @@
 - Mutation defaults are tested from an empty environment.
 - Audit partial writes/concurrent appends/permissions/rotation failure, stale proposal, forged/replayed/expired/wrong-digest approval, server restart, unrelated Git dirt, and failed rollback must fail closed.
 - Auth tests reject userinfo/unsupported schemes and prove bearer headers are not sent on redirects, cross-origin destinations, or independently supplied WebSocket URLs.
-- Recent-error tests cover malformed/oversized/multiline/token-bearing/webhook-bearing/credential-URL input and confirm only bounded summaries emerge.
+- Recent-error tests cover authenticated WebSocket connection reuse/reconnect, command failure, oversized messages, malformed structured entries, timestamp/count/source validation, token/webhook redaction, exception exclusion, and bounded summaries.
 - Add-on manifest tests assert Phase 1 has no `/config`, Supervisor, Docker, privileged, host-network, or host-filesystem capability and declares only the Core API permission needed.
 - HTTP tests cover disabled/unprovisioned startup, ingress-only per-client 256-bit pairing, hash persistence/permissions, constant-time bearer verification, query rejection, per-client/rotate-all revocation, access-log canaries, Host/Origin/DNS rebinding, trusted/untrusted forwarded headers, request/header/output/time/session/concurrency/rate bounds, graceful overload, distinct-client session ownership, expiry/replay/reconnect, and cross-client rejection.
 - TLS tests cover ECDSA certificate/key generation, mode-restricted storage, fingerprint rendering, expiry/corruption, recoverable rotation, all-session invalidation, non-loopback plaintext server/client refusal, passive/active MITM rejection, and certificate-rotation recovery without TOFU bypass.
@@ -32,4 +32,4 @@ The Home Assistant add-on `aarch64` image is the authoritative Phase 1 artifact.
 
 Every phase: format check, lint, type check, focused tests, all relevant tests, security suite, `git diff --check`, diff inspection, build/package smoke test, and clean-room validation. Any critical safety test failure blocks continuation. E2E unavailable for a phase is reported `UNVERIFIED`, never passed.
 
-The authoritative command will be a single package script (planned `pnpm verify`) once the scaffold exists; it must compose deterministic non-production checks and remain CI-equivalent.
+The authoritative deterministic non-production command is `pnpm verify`; it composes add-on mirror, formatting, lint, type, build, and complete test checks.
