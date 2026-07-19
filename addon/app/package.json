@@ -20,11 +20,14 @@
     "test": "vitest run",
     "test:security": "vitest run tests/security.test.ts tests/addon.test.ts",
     "test:mcp": "vitest run tests/mcp.test.ts",
+    "validate:linux:git": "node scripts/linux/git-candidate-harness.mjs",
+    "validate:linux:persistence": "node scripts/linux/persistence-harness.mjs",
     "addon:context": "node addon/sync-context.mjs --check",
     "verify": "pnpm addon:context && pnpm format:check && pnpm lint && pnpm typecheck && pnpm build && pnpm test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
+    "yaml": "2.9.0",
     "zod": "3.25.76"
   },
   "devDependencies": {

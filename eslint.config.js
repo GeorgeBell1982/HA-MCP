@@ -22,6 +22,15 @@ export default tseslint.config(
     rules: { "@typescript-eslint/only-throw-error": "off" },
   },
   {
+    ...tseslint.configs.disableTypeChecked,
+    files: ["scripts/linux/*.mjs"],
+    rules: {
+      ...tseslint.configs.disableTypeChecked.rules,
+      "no-empty": ["error", { allowEmptyCatch: true }],
+      "no-undef": "off",
+    },
+  },
+  {
     files: ["tests/**/*.ts"],
     rules: {
       "@typescript-eslint/require-await": "off",

@@ -4,7 +4,7 @@ Risk: `HIGH`. This plan requires independent review before implementation. No ph
 
 ## Phase 0: decisions and environment contract
 
-1. Record confirmed target and deployment choice: Home Assistant OS 18.1, Core 2026.7.2, Supervisor 2026.06.2, Raspberry Pi 5 `aarch64`, purpose-built managed add-on, mapped `/config`, storage-mode dashboards.
+1. Record confirmed target and deployment choice: Home Assistant OS 18.1, Core 2026.7.2, Supervisor 2026.06.2, Raspberry Pi 5 `aarch64`, purpose-built managed add-on, host /config exposed by the official add-on mapping as /homeassistant only after the Phase 2 security gates, storage-mode dashboards.
 2. Select a supported Node LTS add-on base image with multi-architecture provenance; do not treat the bundled Node 24 runtime as the production baseline automatically.
 3. Resolve and pin current production v1 MCP SDK and supporting libraries; record licenses/advisories and lockfile.
 4. Prove YAML library round-trip fidelity with HA-tag fixtures before adopting it.
@@ -22,9 +22,11 @@ Status (2026-07-15): deployed add-on 0.1.4 passed the read-only inventory, bridg
 
 ## Phase 2: repository inspection and proposals
 
-Implement bounded config repository and include graph; canonical path/symlink/size/encoding controls; HA-tag-aware YAML document layer; config/list/search/read tools; Git status/diff adapter; durable proposal store; proposal/discard/pending-diff tools. Proposals never touch live config.
+Implement the frozen phase2-contracts.md inventory against confined /homeassistant: bounded repository/include inspection; fail-closed path and secret identity; the exact YAML gate; hardened Git status/diff; durable /data audit/proposal recovery; proposal/discard/pending-diff tools. Proposals never touch live config. Register tools and add the read-only mapping only after every security layer passes.
 
 Exit: adversarial filesystem/YAML/Git/proposal tests, full verify, review, clean room.
+
+Slice F implementation gate: land only the unregistered fixed-operation Git broker protocol/source, strict status and plumbing parsers, deterministic redacted YAML patch engine, fake-broker/source-contract tests, and exact add-on mirrors. Windows and unpackaged runtimes remain unavailable. Real Linux Git execution, hostile config/filter/fsmonitor/hooks, openat2 topology/races, Landlock/seccomp/rlimits, and packaged runtime remain Slice G `UNVERIFIED`. No tool/application/config/container/build/version/mount/package/release/deployment wiring is part of Slice F.
 
 ## Phase 3: guarded application
 

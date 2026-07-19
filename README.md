@@ -9,3 +9,18 @@ See [deployment](docs/deployment.md), [Codex setup](docs/codex-setup.md),
 [security](docs/security.md), and [tool reference](docs/tool-reference.md).
 
 Validation: `pnpm verify`, `pnpm test:security`, and `pnpm test:mcp`.
+
+## Linux-only native reliability lanes
+
+These repository-owned tests remain outside the add-on bundle.
+
+Git candidate matrix:
+
+    pnpm validate:linux:git
+
+Persistence reliability matrix:
+
+    node scripts/linux/persistence-harness.mjs --cc cc --tmpfs-root /path/to/dedicated-bounded-tmpfs
+
+The persistence lane requires a dedicated tmpfs no larger than 128 MiB because its
+ENOSPC row deliberately fills and then cleans that filesystem.
