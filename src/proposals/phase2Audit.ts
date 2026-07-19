@@ -78,6 +78,16 @@ async function appendAllAuditBytes(
     }
   }
 }
+function currentUid(): bigint | undefined {
+  return typeof process.getuid === "function"
+    ? BigInt(process.getuid())
+    : undefined;
+}
+
+function privateOwner(metadata: { readonly uid: bigint }): boolean {
+  const uid = currentUid();
+  return uid === undefined || metadata.uid === uid;
+}
 export class Phase2AuditAdapter {
   private chain = Promise.resolve();
   private unhealthy = true;
@@ -451,13 +461,15 @@ function safeAuditMetadata(
     isFile(): boolean;
     nlink: bigint;
     mode: bigint;
+    uid: bigint;
   },
   durability: Phase2DurabilityPort,
 ): boolean {
   return (
     metadata.isFile() &&
     metadata.nlink === 1n &&
-    durability.privateMode(metadata.mode)
+    durability.privateMode(metadata.mode) &&
+    privateOwner(metadata)
   );
 }
 
@@ -467,6 +479,7 @@ function sameIdentity(
     ino: bigint;
     nlink: bigint;
     mode: bigint;
+    uid: bigint;
     isFile(): boolean;
   },
   right: {
@@ -474,6 +487,7 @@ function sameIdentity(
     ino: bigint;
     nlink: bigint;
     mode: bigint;
+    uid: bigint;
     isFile(): boolean;
   },
   durability: Phase2DurabilityPort,
@@ -523,7 +537,11 @@ async function assertDirectory(
   durability: Phase2DurabilityPort,
 ): Promise<void> {
   const metadata = await lstat(path, { bigint: true });
-  if (!metadata.isDirectory() || !durability.privateMode(metadata.mode))
+  if (
+    !metadata.isDirectory() ||
+    !durability.privateMode(metadata.mode) ||
+    !privateOwner(metadata)
+  )
     throw unhealthy("Phase 2 audit directory is unsafe");
 }
 
@@ -535,7 +553,8 @@ async function assertFile(
   if (
     !metadata.isFile() ||
     metadata.nlink !== 1n ||
-    !durability.privateMode(metadata.mode)
+    !durability.privateMode(metadata.mode) ||
+    !privateOwner(metadata)
   )
     throw unhealthy("Phase 2 audit file is unsafe");
 }

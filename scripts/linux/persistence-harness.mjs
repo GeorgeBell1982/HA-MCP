@@ -12,6 +12,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statfsSync,
   symlinkSync,
@@ -23,20 +24,28 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 const worker = resolve("scripts/linux/persistence-worker.mjs"),
   shimSource = resolve("scripts/linux/persistence-fault-shim.c"),
   probeSource = resolve("scripts/linux/persistence-syscall-probe.c");
-const common = [
-  ["open64", "fail"],
+const appendFaults = [
   ["write", "fail"],
   ["write", "short"],
   ["write", "enospc"],
   ["fsync", "fail"],
-  ["close", "fail"],
+];
+const positionedFaults = [
+  ["pwrite", "fail"],
+  ["pwrite", "short"],
+  ["pwrite", "enospc"],
+  ["fsync", "fail"],
+];
+const quarantineFaults = [
+  ["fsync", "fail"],
+  ["rename", "fail"],
 ];
 const systems = {
-  proposal: [...common, ["rename", "fail"]],
-  journal: [...common, ["rename", "fail"]],
-  audit: common,
-  rotation: [...common, ["rename", "fail"]],
-  quarantine: [...common, ["rename", "fail"]],
+  proposal: [...positionedFaults, ["rename", "fail"]],
+  journal: [...positionedFaults, ["rename", "fail"]],
+  audit: appendFaults,
+  rotation: [...appendFaults, ["rename", "fail"]],
+  quarantine: quarantineFaults,
 };
 const probes = [
   ["open", "fail"],
@@ -321,9 +330,25 @@ for (const [s, fs] of Object.entries(systems))
       if (s === "quarantine")
         expect(f?.latched === true, "quarantine fault did not latch unhealthy");
       if (retry && s === "proposal")
-        expect(x.proposals.length === 1, "proposal missing");
+        expect(
+          x.healthy === true &&
+            y.healthy === true &&
+            x.proposals.length === 1 &&
+            y.proposals.length === 1 &&
+            x.quarantine.length === 0 &&
+            y.quarantine.length === 0,
+          "proposal short-write recovery failed",
+        );
       if (retry && s === "journal")
-        expect(x.journals.length === 1, "journal missing");
+        expect(
+          x.healthy === true &&
+            y.healthy === true &&
+            x.journals.length === 1 &&
+            y.journals.length === 1 &&
+            x.quarantine.length === 0 &&
+            y.quarantine.length === 0,
+          "journal short-write recovery failed",
+        );
       if (retry && s === "audit") expect(x.records === 1, "audit missing");
       if (retry && s === "rotation") expect(x.records >= 1, "rotation missing");
       return {
@@ -420,10 +445,37 @@ async function denied(action, root, o = {}) {
 }
 for (const name of fixtures)
   row("fixture:" + name, async () => {
-    if (name === "identity-race")
-      throw new UnverifiedError(
-        "no deterministic existing-API hook exists between protected-file identity checks",
+    if (name === "identity-race") {
+      let root = join(base, "fixture-" + name),
+        swapped = false;
+      mkdirSync(root, { mode: 0o700 });
+      expect((await run("proposal", root)).code === 0, "seed failed");
+      let first = await run("inspect-proposal-identity-race", root, {
+          onMessage(m, ch) {
+            if (m.type !== "identity-race-ready") return;
+            const replacement = join(root, ".identity-race-" + randomUUID());
+            writeFileSync(replacement, "{}", { mode: 0o600 });
+            renameSync(replacement, m.path);
+            swapped = true;
+            ch.send({ type: "continue" });
+          },
+        }),
+        second = await run("inspect-proposal", root),
+        x = done(first),
+        y = done(second);
+      expect(swapped, "identity race was not triggered");
+      expect(
+        first.code === 0 &&
+          second.code === 0 &&
+          x.healthy === false &&
+          x.proposals.length === 0 &&
+          x.quarantine.length === 1 &&
+          y.proposals.length === 0 &&
+          y.quarantine.length === 1,
+        `identity race was not denied: first=${JSON.stringify(x)} second=${JSON.stringify(y)}`,
       );
+      return { outcome: "denied", first: x, second: y };
+    }
     if (name === "tmpfs-enospc") {
       let st = statfsSync(cfg.tmpfsRoot),
         total = st.blocks * st.bsize;
@@ -501,10 +553,10 @@ for (const name of fixtures)
           second.code === 0 &&
           x.healthy === false &&
           y.healthy === false &&
-          x.proposals.length === 2 &&
-          y.proposals.length === 2 &&
-          x.quarantine.length === 0 &&
-          y.quarantine.length === 0,
+          x.proposals.length === 1 &&
+          y.proposals.length === 1 &&
+          x.quarantine.length === 1 &&
+          y.quarantine.length === 1,
         `hard link was not persistently denied and latched: first=${JSON.stringify(x)} second=${JSON.stringify(y)}`,
       );
       assertStableRecovery(x, y);

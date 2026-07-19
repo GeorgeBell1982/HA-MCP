@@ -53,6 +53,9 @@ const storageSchema = z
   .strict();
 
 export type StoredProposal = z.infer<typeof storageSchema>;
+export interface ProtectedProposalStoreHooks {
+  readonly beforeProtectedRead?: (path: string) => Promise<void>;
+}
 const journalSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -109,6 +112,16 @@ export function storageEnvelope(
   });
 }
 
+function currentUid(): bigint | undefined {
+  return typeof process.getuid === "function"
+    ? BigInt(process.getuid())
+    : undefined;
+}
+
+function privateOwner(metadata: { readonly uid: bigint }): boolean {
+  const uid = currentUid();
+  return uid === undefined || metadata.uid === uid;
+}
 async function assertDirectory(
   path: string,
   durability: Phase2DurabilityPort,
@@ -117,7 +130,8 @@ async function assertDirectory(
   if (
     !metadata.isDirectory() ||
     metadata.nlink < 1n ||
-    !durability.privateMode(metadata.mode)
+    !durability.privateMode(metadata.mode) ||
+    !privateOwner(metadata)
   )
     throw unhealthy("Protected proposal directory is unsafe");
 }
@@ -130,7 +144,8 @@ async function assertFile(
   if (
     !metadata.isFile() ||
     metadata.nlink !== 1n ||
-    !durability.privateMode(metadata.mode)
+    !durability.privateMode(metadata.mode) ||
+    !privateOwner(metadata)
   )
     throw unhealthy("Protected proposal file is unsafe");
 }
@@ -151,10 +166,11 @@ async function writeAllProtectedBytes(
   let offset = 0;
   while (offset < bytes.byteLength) {
     try {
+      const remaining = bytes.subarray(offset);
       const { bytesWritten } = await handle.write(
-        bytes,
-        offset,
-        bytes.byteLength - offset,
+        remaining,
+        0,
+        remaining.byteLength,
         offset,
       );
       if (
@@ -273,12 +289,14 @@ async function assertExpectedFile(
 async function readProtectedFile(
   path: string,
   durability: Phase2DurabilityPort,
+  hooks?: ProtectedProposalStoreHooks,
 ): Promise<Buffer> {
   const before = await lstat(path, { bigint: true });
   if (
     !before.isFile() ||
     before.nlink !== 1n ||
-    !durability.privateMode(before.mode)
+    !durability.privateMode(before.mode) ||
+    !privateOwner(before)
   )
     throw unhealthy("Protected proposal file is unsafe");
   if (before.size > BigInt(PROPOSAL_STORE_LIMITS.itemBytes))
@@ -288,6 +306,7 @@ async function readProtectedFile(
     const opened = await handle.stat({ bigint: true });
     if (!sameIdentity(before, opened, durability))
       throw unhealthy("Protected proposal file identity changed");
+    await hooks?.beforeProtectedRead?.(path);
     const bytes = await handle.readFile();
     const after = await handle.stat({ bigint: true });
     const linked = await lstat(path, { bigint: true });
@@ -305,15 +324,16 @@ async function readProtectedFile(
 }
 
 function sameIdentity(
-  left: { dev: bigint; ino: bigint; mode: bigint; nlink: bigint },
-  right: { dev: bigint; ino: bigint; mode: bigint; nlink: bigint },
+  left: { dev: bigint; ino: bigint; mode: bigint; nlink: bigint; uid: bigint },
+  right: { dev: bigint; ino: bigint; mode: bigint; nlink: bigint; uid: bigint },
   durability: Phase2DurabilityPort,
 ): boolean {
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&
     right.nlink === 1n &&
-    durability.privateMode(right.mode)
+    durability.privateMode(right.mode) &&
+    privateOwner(right)
   );
 }
 
@@ -357,6 +377,7 @@ export class ProtectedProposalStore {
   constructor(
     readonly root: string,
     private readonly durability: Phase2DurabilityPort = strictPhase2Durability,
+    private readonly hooks: ProtectedProposalStoreHooks = {},
   ) {
     this.proposalsPath = join(root, "proposals");
     this.journalsPath = join(root, "journals");
@@ -422,7 +443,13 @@ export class ProtectedProposalStore {
         await this.quarantine(name, this.proposalsPath);
       else {
         const path = join(this.proposalsPath, name);
-        const bytes = await readProtectedFile(path, this.durability);
+        let bytes: Uint8Array;
+        try {
+          bytes = await readProtectedFile(path, this.durability, this.hooks);
+        } catch (error) {
+          await this.quarantine(name, this.proposalsPath);
+          throw error;
+        }
         total += bytes.byteLength;
         if (total > PROPOSAL_STORE_LIMITS.aggregateBytes) {
           bytes.fill(0);
@@ -501,10 +528,17 @@ export class ProtectedProposalStore {
     for (const name of names) {
       if (!/^[0-9a-f-]{36}\.json$/u.test(name))
         await this.quarantine(name, this.journalsPath);
-      const bytes = await readProtectedFile(
-        join(this.journalsPath, name),
-        this.durability,
-      );
+      let bytes: Uint8Array;
+      try {
+        bytes = await readProtectedFile(
+          join(this.journalsPath, name),
+          this.durability,
+          this.hooks,
+        );
+      } catch (error) {
+        await this.quarantine(name, this.journalsPath);
+        throw error;
+      }
       total += bytes.byteLength;
       if (total > PROPOSAL_STORE_LIMITS.aggregateBytes) {
         bytes.fill(0);
@@ -628,42 +662,46 @@ export class ProtectedProposalStore {
     if (basename(name) !== name)
       throw unhealthy("Quarantine source name is invalid");
     const source = join(from, name);
-    await assertFile(source, this.durability);
-    const bytes = await readProtectedFile(source, this.durability);
+    const metadata = await lstat(source, { bigint: true });
+    if (
+      !metadata.isFile() ||
+      metadata.nlink < 1n ||
+      !this.durability.privateMode(metadata.mode) ||
+      !privateOwner(metadata)
+    )
+      throw unhealthy("Protected proposal file is unsafe");
+    if (metadata.size > BigInt(PROPOSAL_STORE_LIMITS.itemBytes))
+      throw unhealthy("Protected proposal item exceeds its safe boundary");
+    const existing = await readdir(this.quarantinePath);
+    if (existing.length >= PROPOSAL_STORE_LIMITS.quarantine)
+      throw unhealthy("Quarantine is full");
+    const quarantinedBytes = await this.scanBounded(
+      this.quarantinePath,
+      PROPOSAL_STORE_LIMITS.quarantine,
+      true,
+    );
+    if (
+      BigInt(quarantinedBytes) + metadata.size >
+      BigInt(PROPOSAL_STORE_LIMITS.aggregateBytes)
+    )
+      throw unhealthy("Quarantine byte limit exceeded");
+    const destination = join(
+      this.quarantinePath,
+      `${Date.now()}-${randomUUID()}.quarantine`,
+    );
+    const reservation = await open(
+      destination,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+      0o600,
+    );
     try {
-      const existing = await readdir(this.quarantinePath);
-      if (existing.length >= PROPOSAL_STORE_LIMITS.quarantine)
-        throw unhealthy("Quarantine is full");
-      const quarantinedBytes = await this.scanBounded(
-        this.quarantinePath,
-        PROPOSAL_STORE_LIMITS.quarantine,
-        true,
-      );
-      if (
-        quarantinedBytes + bytes.byteLength >
-        PROPOSAL_STORE_LIMITS.aggregateBytes
-      )
-        throw unhealthy("Quarantine byte limit exceeded");
-      const destination = join(
-        this.quarantinePath,
-        `${Date.now()}-${randomUUID()}.quarantine`,
-      );
-      const reservation = await open(
-        destination,
-        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-        0o600,
-      );
-      try {
-        await reservation.close();
-      } catch (error) {
-        throw normalize(error, "Quarantine reservation failed");
-      }
-      await rename(source, destination);
-      await this.durability.syncDirectory(from);
-      await this.durability.syncDirectory(this.quarantinePath);
-    } finally {
-      bytes.fill(0);
+      await reservation.close();
+    } catch (error) {
+      throw normalize(error, "Quarantine reservation failed");
     }
+    await rename(source, destination);
+    await this.durability.syncDirectory(from);
+    await this.durability.syncDirectory(this.quarantinePath);
     throw unhealthy("Unsafe protected proposal artifact was quarantined");
   }
 }

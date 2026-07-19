@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { phase2SourceEvidence } from "../../dist/phase2Contracts.js";
 import { ProposalCursorCodec } from "../../dist/proposals/cursor.js";
 import { ProposalService } from "../../dist/proposals/proposalService.js";
 import {
@@ -61,7 +62,7 @@ function stored() {
       risk: "high",
       validationPlan: ["validate"],
       reloadImpact: "restart_required",
-      sourceEvidence: "Linux persistence harness",
+      sourceEvidence: phase2SourceEvidence.proposalStore,
     },
     {
       schemaVersion: 1,
@@ -158,10 +159,32 @@ async function buildService(withCheckpoint) {
 async function inspectSubsystem(subsystem) {
   if (
     subsystem === "proposal" ||
+    subsystem === "proposal-identity-race" ||
     subsystem === "journal" ||
     subsystem === "quarantine"
   ) {
-    const inspectionStore = new ProtectedProposalStore(join(root, "store"));
+    const identityRace = subsystem === "proposal-identity-race";
+    let identityRacePaused = false;
+    const inspectionStore = new ProtectedProposalStore(
+      join(root, "store"),
+      undefined,
+      identityRace
+        ? {
+            beforeProtectedRead: async (path) => {
+              if (identityRacePaused) return;
+              identityRacePaused = true;
+              process.send?.({ type: "identity-race-ready", path });
+              await new Promise((resolvePromise) =>
+                process.once("message", (message) => {
+                  if (message?.type !== "continue")
+                    throw new Error("invalid identity race message");
+                  resolvePromise();
+                }),
+              );
+            },
+          }
+        : {},
+    );
     let healthy = true;
     try {
       await inspectionStore.initialize();
