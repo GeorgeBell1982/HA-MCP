@@ -1,7 +1,233 @@
-import { readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { chmod, mkdtemp, writeFile, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
+const execFileAsync = promisify(execFile);
+
 describe("Slice G2 repository-owned Linux harnesses", () => {
+  it("makes candidate-image validation mandatory and machine-readable", async () => {
+    const source = await readFile(
+      new URL("../scripts/linux/candidate-image-harness.mjs", import.meta.url),
+      "utf8",
+    );
+    for (const token of [
+      '"image:metadata"',
+      '"image:native-paths"',
+      '"image:native-artifacts"',
+      '"image:linkage"',
+      '"image:git-protocol-matrix"',
+      '"image:setuid-setgid"',
+      '"image:writable-dirs"',
+      '"image:offline-startup"',
+      "mandatory candidate-image row registry mismatch",
+      'type: "manifest"',
+      'type: "row"',
+      'type: "summary"',
+      '["/run.sh"]',
+      "/app/native/openat2-read",
+      "/app/native/openat2-list",
+      "/app/native/git-broker",
+      "root:root 555 regular file",
+      "git-candidate-harness.mjs",
+      "--network",
+      "none",
+      "apk add|fetch",
+      "/var/tmp",
+    ])
+      expect(source).toContain(token);
+    expect(source).not.toContain("shell: true");
+  });
+
+  it("fails candidate-image validation when frozen evidence mismatches", async () => {
+    const base = await mkdtemp(join(tmpdir(), "candidate-image-harness-"));
+    const fakeDocker = join(
+      base,
+      process.platform === "win32" ? "docker.cmd" : "docker",
+    );
+    const fakeDockerScript = join(base, "fake-docker.mjs");
+    await writeFile(
+      fakeDockerScript,
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const mode = process.env.FAKE_DOCKER_MODE ?? "ok";
+const hashes = new Map([
+  ["/app/native/git-broker", "01823637f02c49e685f84a2b371870945299e772b6dc37dbf9194b2f34f051f8"],
+  ["/app/native/openat2-list", "6fe9587146b927b6f84c53a3d61efd87e6143c9ee95268b9c997d464260bab51"],
+  ["/app/native/openat2-read", "59faab9a79575409e59b3672cb1ecb50a9f3b3a7d0db85f1065d499a3c7c425f"],
+  ["/usr/bin/git", "5b5cbd6facf5d86226063d69fe57064bc5ad79bdccee2af0ac787646c564a880"],
+  ["/lib/ld-musl-x86_64.so.1", "7d221f4e17e8f7ebfc208d6e621bb7fc71bc99081bed47409d77048d9a69dbd5"],
+  ["/usr/lib/libpcre2-8.so.0.14.0", "0eae946d1f2746b6c64cc8beb9230360dc935e8552f89b765c7e697bff232345"],
+  ["/usr/lib/libz.so.1.3.1", "09b1bbd6ffe274039cefaca595f55cec0af65fe90d9e285e5d57ff7ed96948d2"],
+]);
+function out(value) { process.stdout.write(value); }
+if (args[0] === "image" && args[1] === "inspect") {
+  out(JSON.stringify([{ Id: mode === "bad-id" ? "sha256:bad" : "sha256:60d3d5d8fda4f2bee464e02cf99b6394cd787f62572a9a01934f100864c68cb1", RepoDigests: [], Architecture: "amd64", Os: "linux", Config: { Cmd: ["/run.sh"], Labels: mode === "labels" ? { bad: "label" } : null } }]));
+  process.exit(0);
+}
+if (args[0] === "run" && args.includes("--entrypoint") && args.includes("node")) {
+  if (!args.includes(process.cwd() + ":/work:ro")) {
+    process.stderr.write("missing readonly work bind\\n");
+    process.exit(1);
+  }
+  out('{"type":"summary","status":"PASSED","required":74,"executed":74,"passed":74,"failed":[]}\\n');
+  process.exit(0);
+}
+if (args[0] === "run" && args.includes("-lc")) {
+  const command = args.at(-1);
+  if (command.includes("/app/native/*")) {
+    out("file /app/native/git-broker\\nfile /app/native/openat2-list\\nfile /app/native/openat2-read\\n");
+    if (mode === "extra-native-entry") out("dir /app/native/debug\\n");
+  } else if (command.includes("readlink -f")) {
+    const zlibTarget = mode === "bad-link-target" ? "/usr/lib/libz.so.1.2.13" : "/usr/lib/libz.so.1.3.1";
+    out("/lib/ld-musl-x86_64.so.1 -> /lib/ld-musl-x86_64.so.1\\n" + hashes.get("/lib/ld-musl-x86_64.so.1") + "  /lib/ld-musl-x86_64.so.1\\n");
+    out("/usr/lib/libpcre2-8.so.0 -> /usr/lib/libpcre2-8.so.0.14.0\\n" + hashes.get("/usr/lib/libpcre2-8.so.0.14.0") + "  /usr/lib/libpcre2-8.so.0.14.0\\n");
+    out("/usr/lib/libz.so.1 -> " + zlibTarget + "\\n" + hashes.get("/usr/lib/libz.so.1.3.1") + "  " + zlibTarget + "\\n");
+  } else if (command.includes("sha256sum")) {
+    out("root:root 555 regular file /app/native/git-broker\\nroot:root 555 regular file /app/native/openat2-list\\nroot:root 555 regular file /app/native/openat2-read\\n");
+    for (const [path, digest] of hashes) out((mode === "bad-hash" && path === "/app/native/git-broker" ? "0".repeat(64) : digest) + "  " + path + "\\n");
+  } else if (command.includes("ldd")) {
+    out("/lib/ld-musl-x86_64.so.1 (0x1)\\nlibc.musl-x86_64.so.1 => /lib/ld-musl-x86_64.so.1 (0x1)\\nlibpcre2-8.so.0 => /usr/lib/libpcre2-8.so.0 (0x1)\\nlibz.so.1 => /usr/lib/libz.so.1 (0x1)\\n");
+    if (mode === "extra-link") out("libextra.so.1 => /usr/lib/libextra.so.1 (0x1)\\n");
+  } else if (command.includes("-perm -4000")) out("");
+  else if (command.includes("-perm -0002")) out("/tmp\\n/var/tmp\\n");
+  process.exit(0);
+}
+if (args[0] === "run") process.exit(127);
+process.exit(99);
+`,
+    );
+    if (process.platform === "win32")
+      await writeFile(
+        fakeDocker,
+        `@echo off\r\n"${process.execPath}" "${fakeDockerScript}" %*\r\n`,
+      );
+    else {
+      await writeFile(
+        fakeDocker,
+        `#!/bin/sh\n"${process.execPath}" "${fakeDockerScript}" "$@"\n`,
+      );
+      await chmod(fakeDocker, 0o700);
+    }
+
+    const script = new URL(
+      "../scripts/linux/candidate-image-harness.mjs",
+      import.meta.url,
+    );
+    const baseArgs = [
+      fileURLToPath(script),
+      "--image",
+      "candidate:test",
+      "--expected-image-id",
+      "sha256:60d3d5d8fda4f2bee464e02cf99b6394cd787f62572a9a01934f100864c68cb1",
+      "--expected-architecture",
+      "amd64",
+      "--expect-no-labels",
+      "true",
+      "--runtime-loader",
+      "/lib/ld-musl-x86_64.so.1",
+      "--runtime-input",
+      "/usr/lib/libpcre2-8.so.0.14.0",
+      "--runtime-input",
+      "/usr/lib/libz.so.1.3.1",
+      "--expected-startup-status",
+      "null",
+      "--expected-startup-signal",
+      "SIGTERM",
+      "--expected-startup-timed-out",
+      "true",
+      "--startup-timeout-ms",
+      "10",
+      "--expected-sha256",
+      "/app/native/git-broker=sha256:01823637f02c49e685f84a2b371870945299e772b6dc37dbf9194b2f34f051f8",
+      "--expected-sha256",
+      "/app/native/openat2-list=sha256:6fe9587146b927b6f84c53a3d61efd87e6143c9ee95268b9c997d464260bab51",
+      "--expected-sha256",
+      "/app/native/openat2-read=sha256:59faab9a79575409e59b3672cb1ecb50a9f3b3a7d0db85f1065d499a3c7c425f",
+      "--expected-sha256",
+      "/usr/bin/git=sha256:5b5cbd6facf5d86226063d69fe57064bc5ad79bdccee2af0ac787646c564a880",
+      "--expected-sha256",
+      "/lib/ld-musl-x86_64.so.1=sha256:7d221f4e17e8f7ebfc208d6e621bb7fc71bc99081bed47409d77048d9a69dbd5",
+      "--expected-sha256",
+      "/usr/lib/libpcre2-8.so.0.14.0=sha256:0eae946d1f2746b6c64cc8beb9230360dc935e8552f89b765c7e697bff232345",
+      "--expected-sha256",
+      "/usr/lib/libz.so.1.3.1=sha256:09b1bbd6ffe274039cefaca595f55cec0af65fe90d9e285e5d57ff7ed96948d2",
+    ];
+    async function expectHarnessFailure(
+      args: string[],
+      environment: NodeJS.ProcessEnv,
+      expected: string,
+    ) {
+      try {
+        await execFileAsync(process.execPath, args, { env: environment });
+      } catch (error) {
+        const stdout =
+          typeof (error as { stdout?: unknown }).stdout === "string"
+            ? (error as { stdout: string }).stdout
+            : "";
+        expect(stdout).toContain(expected);
+        return;
+      }
+      throw new Error("expected candidate-image harness failure");
+    }
+
+    const env = {
+      ...process.env,
+      HA_CANDIDATE_IMAGE_HARNESS_DOCKER: process.execPath,
+      HA_CANDIDATE_IMAGE_HARNESS_DOCKER_ARGV: JSON.stringify([
+        fakeDockerScript,
+      ]),
+    };
+    await expect(
+      execFileAsync(process.execPath, baseArgs, {
+        env: {
+          ...env,
+          HA_CANDIDATE_IMAGE_HARNESS_ONLY_ROWS: "image:metadata",
+        },
+      }),
+    ).resolves.toBeDefined();
+    await expect(
+      execFileAsync(process.execPath, baseArgs, {
+        env: {
+          ...env,
+          HA_CANDIDATE_IMAGE_HARNESS_ONLY_ROWS: "image:git-protocol-matrix",
+        },
+      }),
+    ).resolves.toBeDefined();
+    for (const [mode, row, expected] of [
+      ["bad-id", "image:metadata", "image ID mismatch"],
+      ["labels", "image:metadata", "image labels are not empty"],
+      [
+        "extra-native-entry",
+        "image:native-paths",
+        "unexpected native helper entries",
+      ],
+      ["bad-hash", "image:native-artifacts", "SHA-256 mismatch"],
+      ["extra-link", "image:linkage", "unexpected linkage targets"],
+      ["bad-link-target", "image:linkage", "linkage realpath mismatch"],
+    ] as const) {
+      await expectHarnessFailure(
+        baseArgs,
+        {
+          ...env,
+          FAKE_DOCKER_MODE: mode,
+          HA_CANDIDATE_IMAGE_HARNESS_ONLY_ROWS: row,
+        },
+        expected,
+      );
+    }
+    await expectHarnessFailure(
+      baseArgs.map((arg, index) =>
+        baseArgs[index - 1] === "--expected-startup-status" ? "0" : arg,
+      ),
+      { ...env, HA_CANDIDATE_IMAGE_HARNESS_ONLY_ROWS: "image:offline-startup" },
+      "startup status mismatch",
+    );
+  }, 60_000);
+
   it("makes every Git candidate matrix family mandatory and machine-readable", async () => {
     const source = await readFile(
       new URL("../scripts/linux/git-candidate-harness.mjs", import.meta.url),
