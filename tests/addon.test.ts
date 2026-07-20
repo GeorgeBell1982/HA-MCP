@@ -28,9 +28,9 @@ const nativeMirrors = [
 const nativeOutputs = ["openat2-read", "openat2-list", "git-broker"] as const;
 
 describe("installable add-on packaging", () => {
-  it("is aarch64-only, unchanged at 0.1.5, and least privilege", async () => {
+  it("is aarch64-only, released at 0.1.6, and least privilege", async () => {
     const manifest = await readFile("addon/config.yaml", "utf8");
-    expect(manifest).toMatch(/^version: "0\.1\.5"$/m);
+    expect(manifest).toMatch(/^version: "0\.1\.6"$/m);
     expect(manifest).toContain("- aarch64");
     expect(manifest).toContain("homeassistant_api: true");
     expect(manifest).toMatch(/^map: \[\]$/m);
