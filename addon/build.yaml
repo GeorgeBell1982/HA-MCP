@@ -1,7 +1,0 @@
-build_from:
-  aarch64: ghcr.io/home-assistant/aarch64-base:3.22@sha256:b530091383543737310fd0b3512123de3e3b5165f221f244d0171b858528d963
-labels:
-  org.opencontainers.image.title: Home Assistant Engineering MCP
-args:
-  NODE_VERSION: "22.17.1"
-  NODE_BUILD_FROM: node:22.17.1-alpine3.22@sha256:ddde8acdbc31cec9740194b86faacadc174f963c48e1f75a0c1d3918ed715aee

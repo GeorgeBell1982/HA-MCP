@@ -1,5 +1,5 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base:3.22@sha256:b530091383543737310fd0b3512123de3e3b5165f221f244d0171b858528d963
-# amd64 development override: --build-arg NODE_BUILD_FROM=node:22.17.1-alpine3.22@sha256:99351363debf40f3495cb7fc657a777334c3b21143e594dbfcc7de187439633c
+ARG HA_BASE_FROM=ghcr.io/home-assistant/aarch64-base:3.22@sha256:b530091383543737310fd0b3512123de3e3b5165f221f244d0171b858528d963
+# amd64 development override: --build-arg HA_BASE_FROM=ghcr.io/home-assistant/base:3.22@sha256:f243712420b3493e9c23d821e4a44c1a1c152c294a9242624de947041cf036cc --build-arg NODE_BUILD_FROM=node:22.17.1-alpine3.22@sha256:99351363debf40f3495cb7fc657a777334c3b21143e594dbfcc7de187439633c
 ARG NODE_BUILD_FROM=node:22.17.1-alpine3.22@sha256:5539840ce9d013fa13e3b9814c9353024be7ac75aca5db6d039504a56c04ea59
 FROM ${NODE_BUILD_FROM} AS build
 WORKDIR /build
@@ -23,7 +23,7 @@ RUN set -eux; \
     cc ${NATIVE_CFLAGS} src/git/native/git-broker.c ${NATIVE_LDFLAGS} -o /build/native/git-broker; \
     file /build/native/openat2-read /build/native/openat2-list /build/native/git-broker
 
-FROM ${BUILD_FROM}
+FROM ${HA_BASE_FROM}
 RUN apk add --no-cache git=2.49.1-r0 nodejs=22.23.0-r0 openssl=3.5.7-r0
 WORKDIR /app
 COPY --from=build build/dist ./dist

@@ -8,8 +8,8 @@ const NODE_INDEX =
   "sha256:5539840ce9d013fa13e3b9814c9353024be7ac75aca5db6d039504a56c04ea59";
 const NODE_AMD64 =
   "sha256:99351363debf40f3495cb7fc657a777334c3b21143e594dbfcc7de187439633c";
-const NODE_ARM64 =
-  "sha256:ddde8acdbc31cec9740194b86faacadc174f963c48e1f75a0c1d3918ed715aee";
+const HA_AMD64 =
+  "sha256:f243712420b3493e9c23d821e4a44c1a1c152c294a9242624de947041cf036cc";
 const HA_ARM64 =
   "sha256:b530091383543737310fd0b3512123de3e3b5165f221f244d0171b858528d963";
 
@@ -28,9 +28,9 @@ const nativeMirrors = [
 const nativeOutputs = ["openat2-read", "openat2-list", "git-broker"] as const;
 
 describe("installable add-on packaging", () => {
-  it("is aarch64-only, released at 0.1.6, and least privilege", async () => {
+  it("is aarch64-only, released at 0.1.7, and least privilege", async () => {
     const manifest = await readFile("addon/config.yaml", "utf8");
-    expect(manifest).toMatch(/^version: "0\.1\.6"$/m);
+    expect(manifest).toMatch(/^version: "0\.1\.7"$/m);
     expect(manifest).toContain("- aarch64");
     expect(manifest).toContain("homeassistant_api: true");
     expect(manifest).toMatch(/^map: \[\]$/m);
@@ -50,19 +50,20 @@ describe("installable add-on packaging", () => {
 
   it("pins candidate build and runtime inputs to immutable aarch64 evidence", async () => {
     const docker = await readFile("addon/Dockerfile", "utf8");
-    const build = await readFile("addon/build.yaml", "utf8");
+    await expect(access("addon/build.yaml")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(docker).toContain(`node:22.17.1-alpine3.22@${NODE_INDEX}`);
     expect(docker).toContain(
-      `--build-arg NODE_BUILD_FROM=node:22.17.1-alpine3.22@${NODE_AMD64}`,
-    );
-    expect(build).toContain(`node:22.17.1-alpine3.22@${NODE_ARM64}`);
-    expect(build).toContain(
-      `ghcr.io/home-assistant/aarch64-base:3.22@${HA_ARM64}`,
+      `--build-arg HA_BASE_FROM=ghcr.io/home-assistant/base:3.22@${HA_AMD64} --build-arg NODE_BUILD_FROM=node:22.17.1-alpine3.22@${NODE_AMD64}`,
     );
     expect(docker).toContain(
-      `ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base:3.22@${HA_ARM64}`,
+      `ARG HA_BASE_FROM=ghcr.io/home-assistant/aarch64-base:3.22@${HA_ARM64}`,
     );
-    for (const digest of [NODE_INDEX, NODE_AMD64, NODE_ARM64, HA_ARM64])
+    expect(docker).toMatch(/^FROM \$\{HA_BASE_FROM\}$/m);
+    expect(docker).not.toMatch(/^ARG BUILD_FROM(?:=|\s|$)/m);
+    expect(docker).not.toContain("FROM ${BUILD_FROM}");
+    for (const digest of [NODE_INDEX, NODE_AMD64, HA_AMD64, HA_ARM64])
       expect(digest).toMatch(/^sha256:[a-f0-9]{64}$/);
     for (const input of [
       "build-base=0.5-r3",
