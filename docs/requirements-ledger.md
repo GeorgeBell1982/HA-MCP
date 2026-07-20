@@ -211,6 +211,30 @@ Validation: focused `pnpm vitest run tests/addon.test.ts`, formatting for change
 
 Prohibited actions: no commit, push, deploy, release, HA access, production mutation, destructive Git, privilege expansion, `/homeassistant` mapping, helper wiring, or dependency changes.
 
+## Slice H Phase 2 add-on activation contract
+
+Objective: activate the 11 frozen Phase 2 repository/proposal tools only for the managed add-on after all local startup gates pass, while preserving the 15 Phase 1 tools and all mutation prohibitions.
+
+Risk: `HIGH`, because this registers public MCP contracts, gates protected repository access, persists cursor/proposal state, and changes add-on packaging.
+
+Slice H supersedes the historical G2 inertness invariants (`map: []`, no helper wiring, and `registered: false`) while retaining every no-mutation and least-privilege guarantee.
+
+Acceptance evidence:
+
+| ID    | Requirement                                                                                                                                                                                | Implementation evidence                                                                                   | Validation evidence                                                                                       |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| H-001 | Phase 2 registers exactly the existing `phase2ToolNames` alongside the 15 Phase 1 tools only in add-on mode with `enable_phase2` true by default. `false` or local mode is Phase1-only.    | Shared registry/composite registry, `Phase2Tools`, config `enablePhase2`, and add-on option wiring.       | Registry inventory tests for enabled, disabled, local, and gate-failure paths.                            |
+| H-002 | Any activation gate failure leaves the process healthy with Phase 1 only; diagnostics are stable closed enum outcomes and never expose exception causes.                                   | Add-on activation gate catches fixed artifact, key, proposal-store, secrets, catalog, and service checks. | Failing-gate and error-envelope tests.                                                                    |
+| H-003 | Startup gates run in order: fixed artifact validation, protected persistent master key, proposal audit/store recovery, `secrets.yaml` strict scalar registration, catalog proof, register. | Injectable activation components with fixed `/homeassistant`, `/data`, and `/app/native` defaults.        | Unit tests for disabled/local/failing gates, key persistence/derivation, and strict secrets basics.       |
+| H-004 | Phase 2 tools are add-on-only read/proposal metadata tools. They never mutate live config, reload, restart, apply, commit, push, or write Git state.                                       | Dispatcher calls repository/resource/Git read services and proposal metadata service only.                | Dispatch/schema tests plus retained Phase 1 fallback tests.                                               |
+| H-005 | Add-on packaging moves to `0.2.0` and uses the official read-only `homeassistant_config` map only with no new privileges or RW mapping.                                                    | `addon/config.yaml`, `run.sh`, docs, changelog, and add-on mirror updates.                                | Updated add-on/config tests; live Supervisor validation remains `UNVERIFIED` until explicitly authorized. |
+
+Behavioural matrix: add-on enabled success, add-on disabled, local mode, each init gate failure, fresh/valid/corrupt protected state, false-to-true rerun, 0.1.7 Phase1-only compatibility, HTTP and stdio dispatch cancellation/deadline, missing/hostile Git per-call failure, secrets/no-leak, proposal `/homeassistant` immutability, and unchanged Phase 1 audit/pairing/TLS behavior.
+
+Validation: focused registry/activation/dispatcher/config/add-on tests, `pnpm typecheck`, `git diff --check`, and broader `pnpm verify`. The arm64 candidate image `sha256:57a705c22e9ed4b296ea434f3ea8b93c78669ffaabb5a130d964730b6f1614ce` passed 7/8 strict packaging rows under Docker Desktop emulation: metadata and exact HA labels, helper paths/hashes, runtime linkage, the exact expected HA-base set-id helper, writable directories, and offline startup. The Git protocol matrix remains `UNVERIFIED` because its sandbox/rlimit process execution fails under amd64-hosted arm64 emulation; G2-016 prohibits treating that as native evidence. Native aarch64, live Supervisor install, and live Home Assistant repository access remain `UNVERIFIED` until the approved deployment test.
+
+Prohibited actions: no commit, push, deploy, release, live HA access, live config mutation, reload, restart, Git write, privilege expansion, RW mapping, or destructive operation.
+
 ## Constraints and assumptions
 
 - TypeScript/Node.js with one registry exposed through local stdio and the Phase 1 add-on's TLS-only Streamable HTTP transport; the optional bridge preserves stdio-only Codex clients.

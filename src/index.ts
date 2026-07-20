@@ -10,14 +10,28 @@ import { PairingStore } from "./security/pairing.js";
 import { loadPairings, startIngress } from "./ingress.js";
 import { startMcpHttps } from "./http.js";
 import { ensureTlsIdentity } from "./security/tls.js";
+import { buildPhase2Registry } from "./phase2Activation.js";
+import { CompositeToolRegistry } from "./toolRegistry.js";
 const config = loadConfig(process.env);
 const audit = new JsonlAudit(config.auditPath);
 await audit.health();
-const tools = new ReadTools(
+const phase1Tools = new ReadTools(
   new HaRestClient(config.baseUrl, config.token),
   new HaWebSocketClient(deriveWebSocketUrl(config.baseUrl), config.token),
   audit,
 );
+const phase2Tools = await buildPhase2Registry({
+  enabled: config.enablePhase2,
+  mode: config.mode,
+  diagnostics: ({ stage, code }) => {
+    process.stderr.write(
+      `${JSON.stringify({ component: "phase2_activation", stage, code })}\n`,
+    );
+  },
+});
+const tools = phase2Tools
+  ? new CompositeToolRegistry([phase1Tools, phase2Tools])
+  : phase1Tools;
 if (config.mode === "addon") {
   const store = new PairingStore(Number(process.env.HA_MAX_CLIENTS ?? 16));
   const pairingPath = process.env.HA_PAIRING_PATH ?? "/data/pairings.json";

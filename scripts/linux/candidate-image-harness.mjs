@@ -48,6 +48,8 @@ function parseArguments(argv) {
     runtimeInputs: [],
     startupTimeoutMs: 5000,
     expectedSha256: new Map(),
+    expectedLabels: null,
+    expectedSetidPaths: [],
   };
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index],
@@ -63,6 +65,18 @@ function parseArguments(argv) {
     else if (flag === "--expected-architecture")
       result.expectedArchitecture = value;
     else if (flag === "--expect-no-labels") result.expectNoLabels = value;
+    else if (flag === "--expected-labels-base64") {
+      const labels = JSON.parse(Buffer.from(value, "base64").toString("utf8"));
+      expect(
+        labels !== null &&
+          typeof labels === "object" &&
+          !Array.isArray(labels) &&
+          Object.values(labels).every((entry) => typeof entry === "string"),
+        "invalid --expected-labels-base64",
+      );
+      result.expectedLabels = labels;
+    } else if (flag === "--expected-setid-path")
+      result.expectedSetidPaths.push(value);
     else if (flag === "--expected-sha256")
       result.expectedSha256.set(...parsePathHash(value));
     else if (flag === "--expected-startup-status")
@@ -79,7 +93,10 @@ function parseArguments(argv) {
   expect(result.runtimeLoader, "missing --runtime-loader");
   expect(result.expectedImageId, "missing --expected-image-id");
   expect(result.expectedArchitecture, "missing --expected-architecture");
-  expect(result.expectNoLabels === "true", "missing --expect-no-labels true");
+  expect(
+    (result.expectNoLabels === "true") !== (result.expectedLabels !== null),
+    "provide exactly one label expectation",
+  );
   expect(
     result.expectedStartupStatus === null ||
       Number.isInteger(result.expectedStartupStatus),
@@ -141,6 +158,8 @@ function runInImage(config, command, timeoutMs = 120_000) {
       "--rm",
       "--network",
       "none",
+      "--platform",
+      `linux/${config.expectedArchitecture}`,
       "--entrypoint",
       "/bin/sh",
       config.image,
@@ -172,7 +191,14 @@ row("image:metadata", (config) => {
     "image command is not /run.sh",
   );
   const labels = inspect.Config?.Labels ?? null;
-  expect(labels === null, "image labels are not empty");
+  if (config.expectNoLabels === "true")
+    expect(labels === null, "image labels are not empty");
+  else
+    expect(
+      JSON.stringify(Object.entries(labels ?? {}).sort()) ===
+        JSON.stringify(Object.entries(config.expectedLabels).sort()),
+      "image labels mismatch",
+    );
   return {
     id: inspect.Id,
     repoDigests: inspect.RepoDigests ?? [],
@@ -306,6 +332,8 @@ row("image:git-protocol-matrix", (config) => {
     "--rm",
     "--network",
     "none",
+    "--platform",
+    `linux/${config.expectedArchitecture}`,
     "-v",
     `${process.cwd()}:/work:ro`,
     "-w",
@@ -343,7 +371,10 @@ row("image:setuid-setgid", (config) => {
     "find / -xdev -type f \\( -perm -4000 -o -perm -2000 \\) -print | sort",
   );
   const paths = output.trim() ? output.trim().split("\n") : [];
-  expect(paths.length === 0, `unexpected setuid/setgid paths: ${paths}`);
+  expect(
+    JSON.stringify(paths) === JSON.stringify(config.expectedSetidPaths),
+    `unexpected setuid/setgid paths: ${paths}`,
+  );
   return { paths };
 });
 
@@ -364,9 +395,18 @@ row("image:writable-dirs", (config) => {
 });
 
 row("image:offline-startup", (config) => {
-  const result = docker(["run", "--rm", "--network", "none", config.image], {
-    timeoutMs: config.startupTimeoutMs,
-  });
+  const result = docker(
+    [
+      "run",
+      "--rm",
+      "--network",
+      "none",
+      "--platform",
+      `linux/${config.expectedArchitecture}`,
+      config.image,
+    ],
+    { timeoutMs: config.startupTimeoutMs },
+  );
   const stderr = result.stderr ?? "";
   const stdout = result.stdout ?? "";
   expect(

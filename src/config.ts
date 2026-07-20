@@ -11,6 +11,7 @@ const schema = z.object({
   SUPERVISOR_TOKEN: z.string().optional(),
   HA_AUDIT_LOG_PATH: z.string().default("./data/audit.jsonl"),
   HA_ENABLE_HTTP: bool,
+  HA_ENABLE_PHASE2: bool,
   HA_ENABLE_WRITES: bool,
   HA_ENABLE_RESTART: bool,
   HA_ENABLE_DELETES: bool,
@@ -21,6 +22,7 @@ export interface Config {
   token: string;
   auditPath: string;
   enableHttp: boolean;
+  enablePhase2: boolean;
   enableWrites: false;
   enableRestart: false;
   enableDeletes: false;
@@ -64,15 +66,24 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     token,
     auditPath: d.HA_AUDIT_LOG_PATH,
     enableHttp: d.HA_ENABLE_HTTP,
+    enablePhase2: d.HA_MODE === "addon" && d.HA_ENABLE_PHASE2,
     enableWrites: false,
     enableRestart: false,
     enableDeletes: false,
   };
 }
-export function publicPolicy(env: NodeJS.ProcessEnv) {
+export function publicPolicy(
+  env: NodeJS.ProcessEnv,
+  runtime: {
+    readonly phase2Active?: boolean;
+    readonly configMapping?: boolean;
+  } = {},
+) {
   return {
     transport: { stdio: true, httpEnabled: env.HA_ENABLE_HTTP === "true" },
     mutations: { writes: false, restart: false, deletes: false },
-    configMapping: false,
+    configMapping: runtime.configMapping === true,
+    phase2Enabled: runtime.phase2Active === true,
+    phase2Requested: env.HA_MODE === "addon" && env.HA_ENABLE_PHASE2 === "true",
   };
 }

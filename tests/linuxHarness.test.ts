@@ -66,8 +66,13 @@ const hashes = new Map([
 ]);
 function out(value) { process.stdout.write(value); }
 if (args[0] === "image" && args[1] === "inspect") {
-  out(JSON.stringify([{ Id: mode === "bad-id" ? "sha256:bad" : "sha256:60d3d5d8fda4f2bee464e02cf99b6394cd787f62572a9a01934f100864c68cb1", RepoDigests: [], Architecture: "amd64", Os: "linux", Config: { Cmd: ["/run.sh"], Labels: mode === "labels" ? { bad: "label" } : null } }]));
+  const labels = mode === "labels" ? { bad: "label" } : mode === "ha-labels" ? { "io.hass.arch": "aarch64" } : null;
+  out(JSON.stringify([{ Id: mode === "bad-id" ? "sha256:bad" : "sha256:60d3d5d8fda4f2bee464e02cf99b6394cd787f62572a9a01934f100864c68cb1", RepoDigests: [], Architecture: "amd64", Os: "linux", Config: { Cmd: ["/run.sh"], Labels: labels } }]));
   process.exit(0);
+}
+if (args[0] === "run" && (!args.includes("--platform") || !args.includes("linux/amd64"))) {
+  process.stderr.write("missing expected platform\\n");
+  process.exit(1);
 }
 if (args[0] === "run" && args.includes("--entrypoint") && args.includes("node")) {
   if (!args.includes(process.cwd() + ":/work:ro")) {
@@ -93,11 +98,12 @@ if (args[0] === "run" && args.includes("-lc")) {
   } else if (command.includes("ldd")) {
     out("/lib/ld-musl-x86_64.so.1 (0x1)\\nlibc.musl-x86_64.so.1 => /lib/ld-musl-x86_64.so.1 (0x1)\\nlibpcre2-8.so.0 => /usr/lib/libpcre2-8.so.0 (0x1)\\nlibz.so.1 => /usr/lib/libz.so.1 (0x1)\\n");
     if (mode === "extra-link") out("libextra.so.1 => /usr/lib/libextra.so.1 (0x1)\\n");
-  } else if (command.includes("-perm -4000")) out("");
+  } else if (command.includes("-perm -4000"))
+    out(mode === "ha-setid" ? "/package/admin/s6-overlay-helpers/command/s6-overlay-suexec\\n" : "");
   else if (command.includes("-perm -0002")) out("/tmp\\n/var/tmp\\n");
   process.exit(0);
 }
-if (args[0] === "run") process.exit(127);
+if (args[0] === "run") process.exit(mode === "startup-success" ? 0 : 127);
 process.exit(99);
 `,
     );
@@ -191,6 +197,46 @@ process.exit(99);
       }),
     ).resolves.toBeDefined();
     await expect(
+      execFileAsync(
+        process.execPath,
+        baseArgs
+          .filter(
+            (arg, index) =>
+              arg !== "--expect-no-labels" &&
+              baseArgs[index - 1] !== "--expect-no-labels",
+          )
+          .concat(
+            "--expected-labels-base64",
+            Buffer.from(JSON.stringify({ "io.hass.arch": "aarch64" })).toString(
+              "base64",
+            ),
+          ),
+        {
+          env: {
+            ...env,
+            FAKE_DOCKER_MODE: "ha-labels",
+            HA_CANDIDATE_IMAGE_HARNESS_ONLY_ROWS: "image:metadata",
+          },
+        },
+      ),
+    ).resolves.toBeDefined();
+    await expect(
+      execFileAsync(
+        process.execPath,
+        baseArgs.concat(
+          "--expected-setid-path",
+          "/package/admin/s6-overlay-helpers/command/s6-overlay-suexec",
+        ),
+        {
+          env: {
+            ...env,
+            FAKE_DOCKER_MODE: "ha-setid",
+            HA_CANDIDATE_IMAGE_HARNESS_ONLY_ROWS: "image:setuid-setgid",
+          },
+        },
+      ),
+    ).resolves.toBeDefined();
+    await expect(
       execFileAsync(process.execPath, baseArgs, {
         env: {
           ...env,
@@ -220,6 +266,23 @@ process.exit(99);
         expected,
       );
     }
+    const startupArgs = baseArgs.map((arg, index) => {
+      if (baseArgs[index - 1] === "--expected-startup-status") return "0";
+      if (baseArgs[index - 1] === "--expected-startup-signal") return "null";
+      if (baseArgs[index - 1] === "--expected-startup-timed-out")
+        return "false";
+      if (baseArgs[index - 1] === "--startup-timeout-ms") return "5000";
+      return arg;
+    });
+    await expect(
+      execFileAsync(process.execPath, startupArgs, {
+        env: {
+          ...env,
+          FAKE_DOCKER_MODE: "startup-success",
+          HA_CANDIDATE_IMAGE_HARNESS_ONLY_ROWS: "image:offline-startup",
+        },
+      }),
+    ).resolves.toBeDefined();
     await expectHarnessFailure(
       baseArgs.map((arg, index) =>
         baseArgs[index - 1] === "--expected-startup-status" ? "0" : arg,

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0
+
+- Activate secure read-only Home Assistant configuration inspection and protected proposal tools behind an add-on switch.
+- Mount Home Assistant configuration read-only; proposals persist only under `/data` and cannot apply, reload, restart, or write Git state.
+
 ## 0.1.7
 
 - Repair Supervisor packaging after 0.1.6 rejected `build.yaml` digest fields, fell back to the reserved `BUILD_FROM` base image, and broke immutable APK package pins.

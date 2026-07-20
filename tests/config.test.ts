@@ -5,10 +5,28 @@ describe("configuration", () => {
     const c = loadConfig({ HA_MODE: "addon", SUPERVISOR_TOKEN: "canary" });
     expect(c.baseUrl.href).toBe("http://supervisor/core/api");
     expect(c).toMatchObject({
+      enablePhase2: false,
       enableWrites: false,
       enableRestart: false,
       enableDeletes: false,
     });
+  });
+  it("enables Phase 2 only for explicit add-on configuration", () => {
+    expect(
+      loadConfig({
+        HA_MODE: "addon",
+        SUPERVISOR_TOKEN: "canary",
+        HA_ENABLE_PHASE2: "true",
+      }).enablePhase2,
+    ).toBe(true);
+    expect(
+      loadConfig({
+        HA_MODE: "local",
+        HA_BASE_URL: "https://ha.test",
+        HA_ACCESS_TOKEN: "x",
+        HA_ENABLE_PHASE2: "true",
+      }).enablePhase2,
+    ).toBe(false);
   });
   it("rejects credential-bearing origins", () =>
     expect(() =>
@@ -26,6 +44,25 @@ describe("configuration", () => {
         HA_ENABLE_DELETES: "true",
       }).mutations,
     ).toEqual({ writes: false, restart: false, deletes: false }));
+  it("does not advertise Phase 2 active from environment intent alone", () => {
+    expect(
+      publicPolicy({ HA_MODE: "addon", HA_ENABLE_PHASE2: "true" }),
+    ).toMatchObject({
+      configMapping: false,
+      phase2Enabled: false,
+      phase2Requested: true,
+    });
+    expect(
+      publicPolicy(
+        { HA_MODE: "addon", HA_ENABLE_PHASE2: "true" },
+        { phase2Active: true, configMapping: true },
+      ),
+    ).toMatchObject({
+      configMapping: true,
+      phase2Enabled: true,
+      phase2Requested: true,
+    });
+  });
   it("normalizes a local origin to the documented API root", () =>
     expect(
       loadConfig({

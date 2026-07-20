@@ -2,7 +2,7 @@ import { SafeError } from "./domain.js";
 import { createServer as createHttpsServer } from "node:https";
 import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { ReadTools } from "./application.js";
+import type { ToolRegistry } from "./toolRegistry.js";
 import { createServer as createMcpServer } from "./transport/mcp.js";
 import type { PairingStore } from "./security/pairing.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -51,7 +51,7 @@ export async function startMcpHttps(options: {
   certificate: string;
   privateKey: string;
   allowedHost: string;
-  tools: ReadTools;
+  tools: ToolRegistry;
   pairings: PairingStore;
   maxSessionsPerClient?: number;
   maxSessionsGlobal?: number;

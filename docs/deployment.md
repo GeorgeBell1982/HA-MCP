@@ -18,7 +18,7 @@ The supported Phase 1 target is Home Assistant OS 18.1 on Raspberry Pi 5
 6. Keep the internal add-on `bind` at `0.0.0.0` so Supervisor port forwarding can reach it, set the matching external-LAN `allowed_host`, publish TCP 8443,
    then set `enable_http: true` and restart the add-on.
 
-The wildcard is permitted only in verified add-on mode; the port remains unpublished (`null`) until explicitly configured, TLS/auth and exact Host checks remain mandatory, and local mode still rejects wildcard binds. The add-on requests only `homeassistant_api`. It has `map: []` and no Docker,
+The wildcard is permitted only in verified add-on mode; the port remains unpublished (`null`) until explicitly configured, TLS/auth and exact Host checks remain mandatory, and local mode still rejects wildcard binds. The add-on requests only `homeassistant_api`. It has only the read-only `homeassistant_config` mapping and no Docker,
 privileged, host-network, or broad Supervisor access. Inside the add-on container,
 port 8099 binds a wildcard so the Supervisor ingress proxy can reach it, but it has no
 host port mapping and is accessible only through authenticated Home Assistant ingress.

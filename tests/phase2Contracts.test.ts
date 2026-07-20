@@ -27,7 +27,7 @@ const digest = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
 
 describe("Phase 2 frozen contracts", () => {
-  it("freezes the complete repository inventory without registering it in Phase 1", () => {
+  it("freezes the complete activated inventory outside the Phase 1 registry", () => {
     expect(phase2ToolNames).toEqual([
       "ha_list_config_files",
       "ha_read_config_file",
@@ -46,7 +46,7 @@ describe("Phase 2 frozen contracts", () => {
     expect(phase2ToolNames.every((name) => !phase1Names.includes(name))).toBe(
       true,
     );
-    expect(phase2Contract.registered).toBe(false);
+    expect(phase2Contract.registered).toBe(true);
     expect(phase2Contract.sourceRoot).toBe("/homeassistant");
   });
 

@@ -1,7 +1,7 @@
 name: Home Assistant Engineering MCP
-version: "0.1.7"
+version: "0.2.0"
 slug: home_assistant_engineering_mcp
-description: Read-only, paired MCP engineering diagnostics for Home Assistant
+description: Paired read-only diagnostics and protected config proposals for Home Assistant
 url: https://github.com/GeorgeBell1982/HA-MCP
 arch:
   - aarch64
@@ -16,15 +16,19 @@ ports:
   8443/tcp: null
 ports_description:
   8443/tcp: TLS-only Streamable HTTP MCP (enable and bind explicitly)
-map: []
+map:
+  - type: homeassistant_config
+    read_only: true
 options:
   enable_http: false
+  enable_phase2: true
   bind: "0.0.0.0"
   allowed_host: "192.168.50.160:8443"
   max_clients: 16
   max_sessions_per_client: 2
 schema:
   enable_http: bool
+  enable_phase2: bool
   bind: str
   allowed_host: str
   max_clients: int(1,64)

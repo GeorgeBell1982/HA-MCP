@@ -28,19 +28,20 @@ const nativeMirrors = [
 const nativeOutputs = ["openat2-read", "openat2-list", "git-broker"] as const;
 
 describe("installable add-on packaging", () => {
-  it("is aarch64-only, released at 0.1.7, and least privilege", async () => {
+  it("is aarch64-only, released at 0.2.0, and least privilege", async () => {
     const manifest = await readFile("addon/config.yaml", "utf8");
-    expect(manifest).toMatch(/^version: "0\.1\.7"$/m);
+    expect(manifest).toMatch(/^version: "0\.2\.0"$/m);
     expect(manifest).toContain("- aarch64");
     expect(manifest).toContain("homeassistant_api: true");
-    expect(manifest).toMatch(/^map: \[\]$/m);
+    expect(manifest).toMatch(
+      /^map:\n {2}- type: homeassistant_config\n {4}read_only: true$/m,
+    );
+    expect(manifest).toContain("enable_phase2: true");
     expect(manifest).toContain("enable_http: false");
     expect(manifest).toContain("ingress_port: 8099");
     expect(manifest).not.toContain("8099/tcp");
     for (const forbidden of [
-      "homeassistant_config",
       "config:rw",
-      "config:ro",
       "privileged:",
       "docker_api:",
       "host_network:",
@@ -81,7 +82,7 @@ describe("installable add-on packaging", () => {
     expect(await readFile("repository.yaml", "utf8")).toContain("name:");
   });
 
-  it("compiles the three exact native mirrors as hardened inert candidates", async () => {
+  it("compiles the three exact native mirrors as hardened helpers", async () => {
     const docker = await readFile("addon/Dockerfile", "utf8");
     for (const flag of [
       "-fPIE",
@@ -117,12 +118,19 @@ describe("installable add-on packaging", () => {
     );
   });
 
-  it("keeps candidate helpers inert and preserves the shipped entrypoint", async () => {
+  it("wires only fixed Phase 2 helpers and preserves the shipped entrypoint", async () => {
     const docker = await readFile("addon/Dockerfile", "utf8");
     const run = await readFile("addon/run.sh", "utf8");
     expect(docker).toMatch(/^CMD \["\/run\.sh"\]$/m);
     expect(run).toMatch(/^exec node \/app\/dist\/index\.js$/m);
-    expect(run).not.toMatch(/\/app\/native|openat2|git-broker|HA_.*HELPER/u);
+    for (const path of [
+      "/app/native/openat2-read",
+      "/app/native/openat2-list",
+      "/app/native/git-broker",
+      "/homeassistant",
+      "/lib/ld-musl-aarch64.so.1",
+    ])
+      expect(run).toContain(path);
     expect(docker).not.toMatch(/^ENV .*?(?:HELPER|OPENAT2|GIT_BROKER)/mu);
     expect(docker).not.toContain("/homeassistant");
   });

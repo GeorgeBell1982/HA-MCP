@@ -4,6 +4,7 @@ import { failure, SafeError, success, type Envelope } from "./domain.js";
 import { HaRestClient, type HaState } from "./ha/rest.js";
 import { redact } from "./redaction.js";
 import { z } from "zod";
+import type { ToolDescriptor, ToolRegistry } from "./toolRegistry.js";
 export interface ToolInput {
   entityId?: string | undefined;
   query?: string | undefined;
@@ -57,30 +58,53 @@ const entityInputs: Record<string, z.ZodType<ToolInput>> = {
     .object({ entityId: z.string().regex(/^script\.[a-z0-9_]+$/) })
     .strict(),
 };
-export class ReadTools {
+const phase1ToolNames = Object.freeze([
+  "ha_get_system_info",
+  "ha_list_entities",
+  "ha_get_entity_state",
+  "ha_search_entities",
+  "ha_list_automations",
+  "ha_get_automation",
+  "ha_list_scripts",
+  "ha_get_script",
+  "ha_list_helpers",
+  "ha_list_dashboards",
+  "ha_get_dashboard",
+  "ha_list_scenes",
+  "ha_list_blueprints",
+  "ha_get_config_status",
+  "ha_get_recent_errors",
+] as const);
+const phase1ToolDescription =
+  "Read-only. No approval, reload, restart, file modification, or Git commit.";
+const phase1McpInput = z.record(z.unknown());
+
+export class ReadTools implements ToolRegistry {
   constructor(
     private readonly ha: HaRestClient,
     private readonly systemLog: HaSystemLogClient,
     private readonly audit: JsonlAudit,
   ) {}
-  names(): string[] {
-    return [
-      "ha_get_system_info",
-      "ha_list_entities",
-      "ha_get_entity_state",
-      "ha_search_entities",
-      "ha_list_automations",
-      "ha_get_automation",
-      "ha_list_scripts",
-      "ha_get_script",
-      "ha_list_helpers",
-      "ha_list_dashboards",
-      "ha_get_dashboard",
-      "ha_list_scenes",
-      "ha_list_blueprints",
-      "ha_get_config_status",
-      "ha_get_recent_errors",
-    ];
+  names(): readonly string[] {
+    return phase1ToolNames;
+  }
+  descriptors(): readonly ToolDescriptor[] {
+    return Object.freeze(
+      phase1ToolNames.map((name) => ({
+        name,
+        description: phase1ToolDescription,
+        inputSchema: phase1McpInput,
+      })),
+    );
+  }
+  descriptor(name: string): ToolDescriptor | undefined {
+    return this.names().includes(name)
+      ? Object.freeze({
+          name,
+          description: phase1ToolDescription,
+          inputSchema: phase1McpInput,
+        })
+      : undefined;
   }
   async call(name: string, rawInput: unknown): Promise<Envelope<unknown>> {
     const requestId = randomUUID();

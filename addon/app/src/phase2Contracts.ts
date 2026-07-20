@@ -606,7 +606,7 @@ export const phase2YamlPolicy = Object.freeze({
 });
 
 export const phase2Contract = Object.freeze({
-  registered: false,
+  registered: true,
   sourceRoot: "/homeassistant" as const,
   proposalInputMode: "existing-yaml-file-whole-document" as const,
   proposalPayloadClassification: "protected" as const,
