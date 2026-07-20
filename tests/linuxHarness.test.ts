@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -228,6 +229,235 @@ process.exit(99);
     );
   }, 60_000);
 
+  it("makes native aarch64 provenance mandatory without overstating trust", async () => {
+    const source = await readFile(
+      new URL(
+        "../scripts/linux/native-aarch64-provenance-harness.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    for (const token of [
+      '"host:os-architecture"',
+      '"host:cpu-provenance"',
+      '"host:binfmt"',
+      '"docker:server"',
+      '"host:runner-provenance"',
+      "mandatory native-aarch64 row registry mismatch",
+      "HA_NATIVE_AARCH64_PROVENANCE_FIXTURE",
+      "selfAttested: true",
+      "external immutable runner provenance is still required",
+      'type: "manifest"',
+      'type: "row"',
+      'type: "summary"',
+    ])
+      expect(source).toContain(token);
+    expect(source).toContain("shell: false");
+    expect(source).not.toContain("shell: true");
+  });
+
+  it("fails native aarch64 provenance on ambiguous or emulated evidence", async () => {
+    const script = fileURLToPath(
+      new URL(
+        "../scripts/linux/native-aarch64-provenance-harness.mjs",
+        import.meta.url,
+      ),
+    );
+    const fixture = {
+      platform: "linux",
+      arch: "arm64",
+      commands: {
+        unameSystem: { status: 0, stdout: "Linux\n", stderr: "" },
+        unameMachine: { status: 0, stdout: "aarch64\n", stderr: "" },
+        lscpu: {
+          status: 0,
+          stdout: JSON.stringify({
+            lscpu: [{ field: "Architecture:", data: "aarch64" }],
+          }),
+          stderr: "",
+        },
+        dockerServer: {
+          status: 0,
+          stdout: JSON.stringify({
+            Server: { OSType: "linux", Architecture: "arm64" },
+          }),
+          stderr: "",
+        },
+      },
+      files: {
+        "/proc/cpuinfo":
+          "processor : 0\nCPU architecture : 8\nHardware : Raspberry Pi 5 Model B Rev 1.0\n",
+        "/proc/sys/fs/binfmt_misc/status": "enabled\n",
+      },
+      directories: {
+        "/proc/sys/fs/binfmt_misc": ["register", "status"],
+      },
+    };
+    const identity = "runner-attestation:sha256:" + "a".repeat(64);
+    const environment = (value: typeof fixture, nodeEnv = "test") => ({
+      ...process.env,
+      NODE_ENV: nodeEnv,
+      HA_NATIVE_AARCH64_PROVENANCE_FIXTURE: JSON.stringify(value),
+    });
+    async function run(
+      value: typeof fixture,
+      args = ["--runner-identity", identity],
+    ) {
+      return execFileAsync(process.execPath, [script, ...args], {
+        env: environment(value),
+      });
+    }
+    async function expectFailure(
+      value: typeof fixture,
+      expected: string,
+      args = ["--runner-identity", identity],
+    ) {
+      try {
+        await run(value, args);
+      } catch (error) {
+        const stdout =
+          typeof (error as { stdout?: unknown }).stdout === "string"
+            ? (error as { stdout: string }).stdout
+            : "";
+        const stderr =
+          typeof (error as { stderr?: unknown }).stderr === "string"
+            ? (error as { stderr: string }).stderr
+            : "";
+        expect(stdout + "\n" + stderr).toContain(expected);
+        return;
+      }
+      throw new Error("expected native aarch64 provenance harness failure");
+    }
+
+    const success = await run(fixture);
+    const records = success.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records.at(-1)).toMatchObject({
+      type: "summary",
+      status: "PASSED",
+      required: 5,
+      executed: 5,
+    });
+    const runnerRecord = records.find(
+      (record) => record.id === "host:runner-provenance",
+    );
+    expect(runnerRecord).toBeDefined();
+    expect(runnerRecord?.evidence).toEqual({
+      identity,
+      bytes: Buffer.byteLength(identity),
+      sha256: createHash("sha256").update(identity).digest("hex"),
+      selfAttested: true,
+      claimLimit:
+        "This self-attested value does not establish runner provenance; external immutable runner provenance is still required.",
+    });
+
+    for (const [mutate, expected] of [
+      [
+        (value: typeof fixture) => Object.assign(value, { platform: "win32" }),
+        "process.platform is not linux",
+      ],
+      [
+        (value: typeof fixture) => Object.assign(value, { arch: "x64" }),
+        "process.arch is not arm64",
+      ],
+      [
+        (value: typeof fixture) =>
+          Object.assign(value.commands.unameSystem, { stdout: "Darwin\n" }),
+        "uname -s is not Linux",
+      ],
+      [
+        (value: typeof fixture) =>
+          Object.assign(value.commands.unameMachine, { stdout: "x86_64\n" }),
+        "uname -m is not aarch64",
+      ],
+      [
+        (value: typeof fixture) =>
+          Object.assign(value.files, {
+            "/proc/cpuinfo": "processor : 0\nHardware : QEMU Virtual CPU\n",
+          }),
+        "CPU provenance contains emulation indicators",
+      ],
+      [
+        (value: typeof fixture) =>
+          Object.assign(value.files, {
+            "/proc/cpuinfo": "processor : 0\nHardware : TCG\n",
+          }),
+        "CPU provenance contains emulation indicators",
+      ],
+      [
+        (value: typeof fixture) =>
+          Object.assign(value.files, {
+            "/proc/cpuinfo": "processor : 0\n",
+          }),
+        "cpuinfo identity evidence is missing",
+      ],
+      [
+        (value: typeof fixture) =>
+          Object.assign(value.files, {
+            "/proc/cpuinfo": "processor : 0\nHardware :   \n",
+          }),
+        "cpuinfo identity evidence is missing",
+      ],
+      [
+        (value: typeof fixture) => {
+          value.directories["/proc/sys/fs/binfmt_misc"].push("qemu-aarch64");
+          Object.assign(value.files, {
+            "/proc/sys/fs/binfmt_misc/qemu-aarch64":
+              "enabled\ninterpreter /usr/bin/qemu-aarch64-static\n",
+          });
+        },
+        "enabled arm64/aarch64 binfmt translation handler detected",
+      ],
+      [
+        (value: typeof fixture) =>
+          Object.assign(value.commands.dockerServer, {
+            stdout: JSON.stringify({
+              Server: { OSType: "linux", Architecture: "amd64" },
+            }),
+          }),
+        "Docker Server architecture is not arm64/aarch64",
+      ],
+    ] as const) {
+      const changed = structuredClone(fixture);
+      mutate(changed);
+      await expectFailure(changed, expected);
+    }
+
+    await expectFailure(fixture, "missing --runner-identity", []);
+    await expectFailure(fixture, "runner identity is empty or whitespace", [
+      "--runner-identity",
+      "   ",
+    ]);
+    await expectFailure(fixture, "runner identity has controls", [
+      "--runner-identity",
+      "runner\u0001identity",
+    ]);
+    await expectFailure(fixture, "runner identity exceeds 512 UTF-8 bytes", [
+      "--runner-identity",
+      "x".repeat(513),
+    ]);
+
+    let productionSeamRejected = false;
+    try {
+      await execFileAsync(
+        process.execPath,
+        [script, "--runner-identity", identity],
+        { env: environment(fixture, "production") },
+      );
+    } catch (error) {
+      productionSeamRejected = true;
+      const stderr =
+        typeof (error as { stderr?: unknown }).stderr === "string"
+          ? (error as { stderr: string }).stderr
+          : "";
+      expect(stderr).toContain(
+        "HA_NATIVE_AARCH64_PROVENANCE_FIXTURE is test-only",
+      );
+    }
+    expect(productionSeamRejected).toBe(true);
+  }, 60_000);
   it("makes every Git candidate matrix family mandatory and machine-readable", async () => {
     const source = await readFile(
       new URL("../scripts/linux/git-candidate-harness.mjs", import.meta.url),

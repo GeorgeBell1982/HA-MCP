@@ -17,13 +17,28 @@ The amd64 command is development evidence only. Native aarch64 execution remains
 mandatory separate gate. The harness emits a required-row manifest, one NDJSON row
 per mandatory case, and a summary; it exits nonzero if a row is missing or fails.
 
+Run the native-runner provenance gate only after the G2-001 human approval for the
+specific aarch64 runner and evidence collection:
+
+```sh
+pnpm validate:native:aarch64 \
+  --runner-identity 'runner-attestation:sha256:<externally-recorded-digest>' \
+  --output /tmp/g2-native-aarch64-provenance.ndjson
+```
+
+The runner identity is recorded as self-attested. A passing in-guest harness rejects
+non-aarch64 state, detected QEMU/TCG or arm64 binfmt translation, and a non-arm64
+Docker server, but it cannot prove that the whole machine is not emulated. G2-016
+and G2-020 remain blocked until external immutable runner provenance accompanies
+the native output and the separately frozen arm64 candidate-image evidence.
+
 Run the candidate-image matrix from the host with Docker access. The caller must
 pass the exact no-follow runtime closure for the image architecture:
 
 ```sh
 pnpm validate:candidate:image \
   --image ha-engineering-mcp:g2-amd64-candidate \
-  --expected-image-id sha256:60d3d5d8fda4f2bee464e02cf99b6394cd787f62572a9a01934f100864c68cb1 \
+  --expected-image-id sha256:e71aec0b2b6d8b76bbeb751b1b0623325509d9665f62c6ebff885f995ae4dc03 \
   --expected-architecture amd64 \
   --expect-no-labels true \
   --runtime-loader /lib/ld-musl-x86_64.so.1 \

@@ -21,6 +21,7 @@
     "test:security": "vitest run tests/security.test.ts tests/addon.test.ts",
     "test:mcp": "vitest run tests/mcp.test.ts",
     "validate:candidate:image": "node scripts/linux/candidate-image-harness.mjs",
+    "validate:native:aarch64": "node scripts/linux/native-aarch64-provenance-harness.mjs",
     "validate:linux:git": "node scripts/linux/git-candidate-harness.mjs",
     "validate:linux:persistence": "pnpm build && node scripts/linux/persistence-harness.mjs",
     "addon:context": "node addon/sync-context.mjs --check",
