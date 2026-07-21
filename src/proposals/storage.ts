@@ -431,6 +431,31 @@ export class ProtectedProposalStore {
       "Protected proposal scan failed",
     );
   }
+  async readExact(proposalId: string): Promise<StoredProposal> {
+    this.assertHealthy();
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+        proposalId,
+      )
+    )
+      throw unhealthy("Protected proposal identifier is invalid");
+    let bytes: Uint8Array | undefined;
+    try {
+      bytes = await readProtectedFile(
+        join(this.proposalsPath, `${proposalId}.json`),
+        this.durability,
+        this.hooks,
+      );
+      const proposal = parseStored(bytes);
+      if (proposal.public.proposalId !== proposalId)
+        throw unhealthy("Protected proposal identity mismatch");
+      return proposal;
+    } catch (error) {
+      throw normalize(error, "Protected proposal read failed");
+    } finally {
+      bytes?.fill(0);
+    }
+  }
 
   private async scanProposals(): Promise<StoredProposal[]> {
     const names = (await readdir(this.proposalsPath)).sort();

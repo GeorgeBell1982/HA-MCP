@@ -9,9 +9,10 @@ const phase3Files = [
   "approval.ts",
   "resourceLocks.ts",
   "applyCoordinator.ts",
+  "proposalAdapter.ts",
 ] as const;
 
-describe("Phase 3A isolation", () => {
+describe("Phase 3A/3B isolation", () => {
   it("does not register tools or enable writes", () => {
     const phase1Names = ReadTools.prototype.names.call({});
     expect(phase1Names.some((name) => name.includes("phase3"))).toBe(false);
@@ -21,7 +22,24 @@ describe("Phase 3A isolation", () => {
     expect(phase3Contract.liveAdapters).toBe("absent");
   });
 
-  it("keeps root and add-on Phase 3A source mirrors exact", () => {
+  it("keeps the Phase 3B adapter out of runtime composition", () => {
+    for (const path of [
+      "src/index.ts",
+      "src/phase2Activation.ts",
+      "src/toolRegistry.ts",
+      "src/cli.ts",
+      "src/config.ts",
+      "addon/app/src/index.ts",
+      "addon/app/src/phase2Activation.ts",
+      "addon/app/src/toolRegistry.ts",
+      "addon/app/src/cli.ts",
+      "addon/app/src/config.ts",
+    ]) {
+      expect(readFileSync(path, "utf8")).not.toContain("proposalAdapter");
+    }
+  });
+
+  it("keeps root and add-on Phase 3A/3B source mirrors exact", () => {
     for (const file of phase3Files) {
       const root = readFileSync(`src/phase3/${file}`, "utf8");
       const addon = readFileSync(`addon/app/src/phase3/${file}`, "utf8");

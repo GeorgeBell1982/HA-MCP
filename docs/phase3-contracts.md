@@ -65,3 +65,11 @@ Startup recovery never reapplies the candidate. It returns one `Phase3RecoveryRe
 - `manual_recovery_required`: no effect.
 
 `commit_unknown` is not a journal state; it is structured failure evidence and uses the same digest-driven conservative recovery.
+
+## Phase 3B Protected Proposal Input
+
+Phase 3B adds one unregistered read-only adapter from the existing protected Phase 2 proposal store to Phase3ProposalPort. Exact lookup validates a canonical lowercase UUID, reads only the corresponding protected file, applies the existing no-follow, private-file, single-link, stable-identity, strict-schema, canonical-JSON, and storage-digest checks, and never scans or quarantines. Raw file bytes are zeroed after parsing.
+
+The adapter preserves proposal state, maps reloadImpact to impact, binds the Phase 2 storage digest as proposalStorageSha256, and requires public/protected proposal IDs, idempotency keys, candidate digests, and diff digests to agree. Candidate and exact-diff base64 are canonical, strict UTF-8, and digest-verified before a fresh candidate buffer is returned; temporary protected buffers are zeroed. Stable errors reveal no protected content.
+
+Phase 3B does not add a journal, checkpoint, source, write, validation, reload, verification, approval producer, CLI, MCP tool, registry entry, configuration flag, package change, mapping change, or runtime import. Live writes remain disabled.
