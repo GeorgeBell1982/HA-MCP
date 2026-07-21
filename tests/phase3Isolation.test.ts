@@ -12,9 +12,13 @@ const phase3Files = [
   "proposalAdapter.ts",
   "journal.ts",
   "checkpoints.ts",
+  "sourceAdapter.ts",
+  "atomicApply.ts",
 ] as const;
 
-describe("Phase 3A/3B/3C/3D isolation", () => {
+const phase3NativeFiles = ["openat2-replace.c"] as const;
+
+describe("Phase 3A/3B/3C/3D/3E/3F isolation", () => {
   it("does not register tools or enable writes", () => {
     const phase1Names = ReadTools.prototype.names.call({});
     expect(phase1Names.some((name) => name.includes("phase3"))).toBe(false);
@@ -24,13 +28,18 @@ describe("Phase 3A/3B/3C/3D isolation", () => {
     expect(phase3Contract.liveAdapters).toBe("absent");
   });
 
-  it("keeps the Phase 3B/3C/3D adapters out of runtime composition", () => {
+  it("keeps the Phase 3B/3C/3D/3E/3F adapters out of runtime composition", () => {
     for (const path of [
       "src/index.ts",
       "src/phase2Activation.ts",
       "src/toolRegistry.ts",
       "src/cli.ts",
       "src/config.ts",
+      "package.json",
+      "pnpm-workspace.yaml",
+      "addon/Dockerfile",
+      "addon/config.yaml",
+      "addon/app/package.json",
       "addon/app/src/index.ts",
       "addon/app/src/phase2Activation.ts",
       "addon/app/src/toolRegistry.ts",
@@ -41,13 +50,23 @@ describe("Phase 3A/3B/3C/3D isolation", () => {
       expect(source).not.toContain("proposalAdapter");
       expect(source).not.toContain("phase3/journal");
       expect(source).not.toContain("phase3/checkpoints");
+      expect(source).not.toContain("sourceAdapter");
+      expect(source).not.toContain("phase3/sourceAdapter");
+      expect(source).not.toContain("atomicApply");
+      expect(source).not.toContain("phase3/atomicApply");
+      expect(source).not.toContain("openat2-replace");
     }
   });
 
-  it("keeps root and add-on Phase 3A/3B/3C/3D source mirrors exact", () => {
+  it("keeps root and add-on Phase 3A/3B/3C/3D/3E/3F source mirrors exact", () => {
     for (const file of phase3Files) {
       const root = readFileSync(`src/phase3/${file}`, "utf8");
       const addon = readFileSync(`addon/app/src/phase3/${file}`, "utf8");
+      expect(addon).toBe(root);
+    }
+    for (const file of phase3NativeFiles) {
+      const root = readFileSync(`src/phase3/native/${file}`, "utf8");
+      const addon = readFileSync(`addon/app/src/phase3/native/${file}`, "utf8");
       expect(addon).toBe(root);
     }
   });
