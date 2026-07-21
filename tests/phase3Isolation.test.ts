@@ -10,6 +10,7 @@ const phase3Files = [
   "resourceLocks.ts",
   "applyCoordinator.ts",
   "proposalAdapter.ts",
+  "journal.ts",
 ] as const;
 
 describe("Phase 3A/3B isolation", () => {
@@ -35,7 +36,9 @@ describe("Phase 3A/3B isolation", () => {
       "addon/app/src/cli.ts",
       "addon/app/src/config.ts",
     ]) {
-      expect(readFileSync(path, "utf8")).not.toContain("proposalAdapter");
+      const source = readFileSync(path, "utf8");
+      expect(source).not.toContain("proposalAdapter");
+      expect(source).not.toContain("phase3/journal");
     }
   });
 
