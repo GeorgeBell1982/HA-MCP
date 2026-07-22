@@ -16,11 +16,12 @@ const phase3Files = [
   "atomicApply.ts",
   "validationAdapter.ts",
   "reloadAdapter.ts",
+  "verificationAdapter.ts",
 ] as const;
 
 const phase3NativeFiles = ["openat2-replace.c"] as const;
 
-describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I isolation", () => {
+describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J isolation", () => {
   it("does not register tools or enable writes", () => {
     const phase1Names = ReadTools.prototype.names.call({});
     expect(phase1Names.some((name) => name.includes("phase3"))).toBe(false);
@@ -30,7 +31,7 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I isolation", () => {
     expect(phase3Contract.liveAdapters).toBe("absent");
   });
 
-  it("keeps the Phase 3B/3C/3D/3E/3F/3G/3H/3I adapters out of runtime composition", () => {
+  it("keeps the Phase 3B/3C/3D/3E/3F/3G/3H/3I/3J adapters out of runtime composition", () => {
     for (const path of [
       "src/index.ts",
       "src/phase2Activation.ts",
@@ -60,11 +61,13 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I isolation", () => {
       expect(source).not.toContain("phase3/validationAdapter");
       expect(source).not.toContain("reloadAdapter");
       expect(source).not.toContain("phase3/reloadAdapter");
+      expect(source).not.toContain("verificationAdapter");
+      expect(source).not.toContain("phase3/verificationAdapter");
       expect(source).not.toContain("openat2-replace");
     }
   });
 
-  it("keeps root and add-on Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I source mirrors exact", () => {
+  it("keeps root and add-on Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J source mirrors exact", () => {
     for (const file of phase3Files) {
       const root = readFileSync(`src/phase3/${file}`, "utf8");
       const addon = readFileSync(`addon/app/src/phase3/${file}`, "utf8");
@@ -75,5 +78,27 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I isolation", () => {
       const addon = readFileSync(`addon/app/src/phase3/native/${file}`, "utf8");
       expect(addon).toBe(root);
     }
+  });
+
+  it("keeps the Phase 3J adapter on an exact narrow import allowlist", () => {
+    const source = readFileSync("src/phase3/verificationAdapter.ts", "utf8");
+    const imports = [...source.matchAll(/from\s+"([^"]+)"/gu)]
+      .map((match) => match[1])
+      .sort();
+    expect(imports).toEqual(["./applyCoordinator.js", "./contracts.js"]);
+
+    for (const forbidden of [
+      "../ha/rest",
+      "../ha/websocket",
+      "application",
+      "fetch(",
+      "axios",
+      "system_log/list",
+      "system_log",
+      "entity",
+      "logbook",
+      "get_logs",
+    ])
+      expect(source.toLowerCase()).not.toContain(forbidden);
   });
 });
