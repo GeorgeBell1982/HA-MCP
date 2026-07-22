@@ -77,6 +77,7 @@ describe("Phase 3C durable transaction journal", () => {
     for (const state of [
       "apply_committed",
       "post_validation_succeeded",
+      "reload_intent",
       "reload_succeeded",
       "verification_succeeded",
     ] as const) {
@@ -89,7 +90,7 @@ describe("Phase 3C durable transaction journal", () => {
     const restarted = await initialized(root);
     await expect(restarted.load(current.transactionId)).resolves.toMatchObject({
       state: "verification_succeeded",
-      version: 4,
+      version: 5,
       priorState: "reload_succeeded",
     });
     expect((await restarted.listRecoverable())[0]?.state).toBe(
@@ -109,13 +110,19 @@ describe("Phase 3C durable transaction journal", () => {
       ],
       [
         "reload_succeeded",
-        ["apply_committed", "post_validation_succeeded", "reload_succeeded"],
+        [
+          "apply_committed",
+          "post_validation_succeeded",
+          "reload_intent",
+          "reload_succeeded",
+        ],
       ],
       [
         "verification_succeeded",
         [
           "apply_committed",
           "post_validation_succeeded",
+          "reload_intent",
           "reload_succeeded",
           "verification_succeeded",
         ],
@@ -156,6 +163,236 @@ describe("Phase 3C durable transaction journal", () => {
     expect(
       (await restarted.listRecoverable()).map((item) => item.state),
     ).toEqual(cases.map(([state]) => state));
+  });
+  it("enforces contextual reload transitions at transition time", async () => {
+    const journal = await initialized(await journalRoot());
+
+    let domain = await journal.createIntent(record(1001));
+    domain = await journal.transition(
+      domain.transactionId,
+      domain.version,
+      "apply_committed",
+    );
+    domain = await journal.transition(
+      domain.transactionId,
+      domain.version,
+      "post_validation_succeeded",
+    );
+    await expect(
+      journal.transition(
+        domain.transactionId,
+        domain.version,
+        "reload_succeeded",
+      ),
+    ).rejects.toMatchObject({ code: "journal_illegal" });
+    domain = await journal.transition(
+      domain.transactionId,
+      domain.version,
+      "reload_intent",
+    );
+    domain = await journal.transition(
+      domain.transactionId,
+      domain.version,
+      "rollback_intent",
+      { rollbackReloadRequired: true },
+    );
+    domain = await journal.transition(
+      domain.transactionId,
+      domain.version,
+      "rollback_committed",
+    );
+    domain = await journal.transition(
+      domain.transactionId,
+      domain.version,
+      "rollback_validation_succeeded",
+    );
+    await expect(
+      journal.transition(
+        domain.transactionId,
+        domain.version,
+        "rollback_verification_succeeded",
+      ),
+    ).rejects.toMatchObject({ code: "journal_illegal" });
+    domain = await journal.transition(
+      domain.transactionId,
+      domain.version,
+      "rollback_reload_intent",
+    );
+    expect(domain.state).toBe("rollback_reload_intent");
+
+    let noReload = await journal.createIntent(
+      record(1002, { impact: "none", reloadTarget: null }),
+    );
+    noReload = await journal.transition(
+      noReload.transactionId,
+      noReload.version,
+      "apply_committed",
+    );
+    noReload = await journal.transition(
+      noReload.transactionId,
+      noReload.version,
+      "post_validation_succeeded",
+    );
+    await expect(
+      journal.transition(
+        noReload.transactionId,
+        noReload.version,
+        "reload_intent",
+      ),
+    ).rejects.toMatchObject({ code: "journal_illegal" });
+    noReload = await journal.transition(
+      noReload.transactionId,
+      noReload.version,
+      "reload_succeeded",
+    );
+    noReload = await journal.transition(
+      noReload.transactionId,
+      noReload.version,
+      "rollback_intent",
+    );
+    noReload = await journal.transition(
+      noReload.transactionId,
+      noReload.version,
+      "rollback_committed",
+    );
+    noReload = await journal.transition(
+      noReload.transactionId,
+      noReload.version,
+      "rollback_validation_succeeded",
+    );
+    await expect(
+      journal.transition(
+        noReload.transactionId,
+        noReload.version,
+        "rollback_reload_intent",
+      ),
+    ).rejects.toMatchObject({ code: "journal_illegal" });
+    noReload = await journal.transition(
+      noReload.transactionId,
+      noReload.version,
+      "rollback_verification_succeeded",
+    );
+    expect(noReload.state).toBe("rollback_verification_succeeded");
+  });
+
+  it("enforces rollback intent flag provenance during durable transitions", async () => {
+    const journal = await initialized(await journalRoot());
+
+    let preReload = await journal.createIntent(record(1004));
+    preReload = await journal.transition(
+      preReload.transactionId,
+      preReload.version,
+      "apply_committed",
+    );
+    await expect(
+      journal.transition(
+        preReload.transactionId,
+        preReload.version,
+        "rollback_intent",
+        { rollbackReloadRequired: true },
+      ),
+    ).rejects.toMatchObject({ code: "journal_illegal" });
+    await expect(
+      journal.transition(
+        preReload.transactionId,
+        preReload.version,
+        "rollback_intent",
+      ),
+    ).resolves.toMatchObject({ rollbackReloadRequired: false });
+
+    for (const [index, rollbackReloadRequired] of [
+      [1005, false],
+      [1006, true],
+    ] as const) {
+      let reloadIntent = await journal.createIntent(record(index));
+      for (const state of [
+        "apply_committed",
+        "post_validation_succeeded",
+        "reload_intent",
+      ] as const)
+        reloadIntent = await journal.transition(
+          reloadIntent.transactionId,
+          reloadIntent.version,
+          state,
+        );
+      await expect(
+        journal.transition(
+          reloadIntent.transactionId,
+          reloadIntent.version,
+          "rollback_intent",
+          rollbackReloadRequired ? { rollbackReloadRequired: true } : {},
+        ),
+      ).resolves.toMatchObject({ rollbackReloadRequired });
+    }
+
+    let targetedReload = await journal.createIntent(record(1007));
+    for (const state of [
+      "apply_committed",
+      "post_validation_succeeded",
+      "reload_intent",
+      "reload_succeeded",
+    ] as const)
+      targetedReload = await journal.transition(
+        targetedReload.transactionId,
+        targetedReload.version,
+        state,
+      );
+    await expect(
+      journal.transition(
+        targetedReload.transactionId,
+        targetedReload.version,
+        "rollback_intent",
+      ),
+    ).rejects.toMatchObject({ code: "journal_illegal" });
+    await expect(
+      journal.transition(
+        targetedReload.transactionId,
+        targetedReload.version,
+        "rollback_intent",
+        { rollbackReloadRequired: true },
+      ),
+    ).resolves.toMatchObject({ rollbackReloadRequired: true });
+
+    let noReload = await journal.createIntent(
+      record(1008, { impact: "none", reloadTarget: null }),
+    );
+    for (const state of [
+      "apply_committed",
+      "post_validation_succeeded",
+      "reload_succeeded",
+    ] as const)
+      noReload = await journal.transition(
+        noReload.transactionId,
+        noReload.version,
+        state,
+      );
+    await expect(
+      journal.transition(
+        noReload.transactionId,
+        noReload.version,
+        "rollback_intent",
+      ),
+    ).resolves.toMatchObject({ rollbackReloadRequired: false });
+  });
+  it("rejects rollback reload on durable intent without appending or poisoning the journal", async () => {
+    const root = await journalRoot();
+    const journal = await initialized(root);
+    const invalid = record(1003, { rollbackReloadRequired: true });
+
+    await expect(journal.createIntent(invalid)).rejects.toMatchObject({
+      code: "journal_illegal",
+    });
+    expect(await readdir(root)).toEqual([]);
+    expect(await journal.listRecoverable()).toEqual([]);
+
+    const created = await journal.createIntent(record(1003));
+    expect(created).toMatchObject({
+      state: "intent_prepared",
+      rollbackReloadRequired: false,
+    });
+    expect(await journal.load(created.transactionId)).toMatchObject({
+      version: 0,
+    });
   });
   it("rejects duplicate intents, stale versions, and illegal transitions", async () => {
     const journal = await initialized(await journalRoot());
@@ -307,13 +544,13 @@ describe("Phase 3C durable transaction journal", () => {
     )!;
     const path = join(root, entry);
     const value = JSON.parse(await readFile(path, "utf8")) as {
-      schemaVersion: 1;
+      schemaVersion: 2;
       record: Phase3TransactionRecord;
       recordSha256: string;
     };
     value.record.path = "scripts/tampered.yaml";
     value.recordSha256 = sha256(
-      canonicalJson({ schemaVersion: 1, record: value.record }),
+      canonicalJson({ schemaVersion: 2, record: value.record }),
     );
     await writeFile(path, canonicalJson(value));
     await expect(initialized(root)).rejects.toMatchObject({
@@ -321,6 +558,154 @@ describe("Phase 3C durable transaction journal", () => {
     });
   });
 
+  it("rejects a canonically re-signed contextual reload bypass", async () => {
+    const root = await journalRoot();
+    const journal = await initialized(root);
+    let current = await journal.createIntent(record(3));
+    current = await journal.transition(
+      current.transactionId,
+      current.version,
+      "apply_committed",
+    );
+    current = await journal.transition(
+      current.transactionId,
+      current.version,
+      "post_validation_succeeded",
+    );
+    await journal.transition(
+      current.transactionId,
+      current.version,
+      "reload_intent",
+    );
+
+    const entry = (await readdir(root)).find((name) =>
+      name.includes(".000000000002.entry"),
+    )!;
+    const path = join(root, entry);
+    const value = JSON.parse(await readFile(path, "utf8")) as {
+      schemaVersion: 2;
+      record: Phase3TransactionRecord;
+      recordSha256: string;
+    };
+    value.record.state = "reload_succeeded";
+    value.recordSha256 = sha256(
+      canonicalJson({ schemaVersion: 2, record: value.record }),
+    );
+    await writeFile(path, canonicalJson(value));
+    await expect(initialized(root)).rejects.toMatchObject({
+      code: "journal_unhealthy",
+    });
+  });
+
+  it("rejects canonically re-signed rollback intent flag bypass and invention", async () => {
+    const bypassRoot = await journalRoot();
+    const bypassJournal = await initialized(bypassRoot);
+    let bypass = await bypassJournal.createIntent(record(1009));
+    for (const state of [
+      "apply_committed",
+      "post_validation_succeeded",
+      "reload_intent",
+      "reload_succeeded",
+    ] as const)
+      bypass = await bypassJournal.transition(
+        bypass.transactionId,
+        bypass.version,
+        state,
+      );
+    bypass = await bypassJournal.transition(
+      bypass.transactionId,
+      bypass.version,
+      "rollback_intent",
+      { rollbackReloadRequired: true },
+    );
+    const bypassEntry = (await readdir(bypassRoot)).find((name) =>
+      name.includes(".000000000005.entry"),
+    )!;
+    const bypassPath = join(bypassRoot, bypassEntry);
+    const bypassEnvelope = JSON.parse(await readFile(bypassPath, "utf8")) as {
+      schemaVersion: 2;
+      record: Phase3TransactionRecord;
+      recordSha256: string;
+    };
+    bypassEnvelope.record.rollbackReloadRequired = false;
+    bypassEnvelope.recordSha256 = sha256(
+      canonicalJson({
+        schemaVersion: 2,
+        record: bypassEnvelope.record,
+      }),
+    );
+    await writeFile(bypassPath, canonicalJson(bypassEnvelope));
+    await expect(initialized(bypassRoot)).rejects.toMatchObject({
+      code: "journal_unhealthy",
+    });
+
+    const inventionRoot = await journalRoot();
+    const inventionJournal = await initialized(inventionRoot);
+    let invention = await inventionJournal.createIntent(record(1010));
+    invention = await inventionJournal.transition(
+      invention.transactionId,
+      invention.version,
+      "apply_committed",
+    );
+    invention = await inventionJournal.transition(
+      invention.transactionId,
+      invention.version,
+      "rollback_intent",
+    );
+    const inventionEntry = (await readdir(inventionRoot)).find((name) =>
+      name.includes(".000000000002.entry"),
+    )!;
+    const inventionPath = join(inventionRoot, inventionEntry);
+    const inventionEnvelope = JSON.parse(
+      await readFile(inventionPath, "utf8"),
+    ) as {
+      schemaVersion: 2;
+      record: Phase3TransactionRecord;
+      recordSha256: string;
+    };
+    inventionEnvelope.record.rollbackReloadRequired = true;
+    inventionEnvelope.recordSha256 = sha256(
+      canonicalJson({
+        schemaVersion: 2,
+        record: inventionEnvelope.record,
+      }),
+    );
+    await writeFile(inventionPath, canonicalJson(inventionEnvelope));
+    await expect(initialized(inventionRoot)).rejects.toMatchObject({
+      code: "journal_unhealthy",
+    });
+  });
+
+  it("rejects a canonical v1 envelope without changing its name or bytes", async () => {
+    const root = await journalRoot();
+    const v1Record = {
+      ...record(1011),
+      schemaVersion: 1,
+    };
+    const core = {
+      schemaVersion: 1 as const,
+      record: v1Record,
+    };
+    const envelope = {
+      ...core,
+      recordSha256: sha256(canonicalJson(core)),
+    };
+    const name = `${v1Record.transactionId}.000000000000.entry`;
+    const path = join(root, name);
+    const bytes = Buffer.from(canonicalJson(envelope), "utf8");
+    await writeFile(path, bytes, { mode: 0o600 });
+    const namesBefore = await readdir(root);
+    const bytesBefore = await readFile(path);
+
+    const journal = new DurablePhase3Journal(root, {
+      durability: logicalDurability,
+    });
+    await expect(journal.initialize()).rejects.toMatchObject({
+      code: "journal_unhealthy",
+    });
+    expect(await readdir(root)).toEqual(namesBefore);
+    expect(await readFile(path)).toEqual(bytesBefore);
+  });
   it("rejects hard-linked committed records without removing evidence", async () => {
     const root = await journalRoot();
     const outside = await journalRoot();
@@ -602,10 +987,13 @@ async function initialized(
   return journal;
 }
 
-function record(index: number): Phase3TransactionRecord {
+function record(
+  index: number,
+  patch: Partial<Phase3TransactionRecord> = {},
+): Phase3TransactionRecord {
   const timestamp = "2026-07-21T00:00:00.000Z";
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     transactionId: transactionId(index),
     proposalId: transactionId(index + 1000),
     proposalStorageSha256: sha256("storage-" + index),
@@ -616,12 +1004,15 @@ function record(index: number): Phase3TransactionRecord {
     checkpointId: transactionId(index + 2000),
     checkpointSha256: sha256("checkpoint-" + index),
     impact: "domain_reload",
+    reloadTarget: "automation.reload",
+    rollbackReloadRequired: false,
     state: "intent_prepared",
     priorState: null,
     version: 0,
     createdAt: timestamp,
     updatedAt: timestamp,
     failure: null,
+    ...patch,
   };
 }
 

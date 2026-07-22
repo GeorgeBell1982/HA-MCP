@@ -37,7 +37,9 @@ describe("Phase 3B protected proposal adapter", () => {
   it.each(["pending", "discarded", "expired"] as const)(
     "maps an exact %s Phase 2 proposal without changing state",
     async (state) => {
-      const { adapter, value } = await fixture(stored({ state }));
+      const { adapter, value } = await fixture(
+        stored({ state, reloadImpact: "none" }),
+      );
       await expect(adapter.load(proposalId)).resolves.toEqual({
         proposalId,
         proposalStorageSha256: value.storageSha256,
@@ -47,21 +49,32 @@ describe("Phase 3B protected proposal adapter", () => {
         candidateSha256: digest(candidate),
         diffSha256: digest(diff),
         risk: "high",
-        impact: "domain_reload",
+        impact: "none",
+        reloadTarget: null,
         expiresAt: "2026-07-21T00:00:00.000Z",
       });
     },
   );
 
-  it.each(["none", "domain_reload", "restart_required"] as const)(
-    "maps the exact %s impact",
+  it.each(["none", "restart_required"] as const)(
+    "maps the exact %s impact to a null reload target",
     async (reloadImpact) => {
       const { adapter } = await fixture(stored({ reloadImpact }));
       await expect(adapter.load(proposalId)).resolves.toMatchObject({
         impact: reloadImpact,
+        reloadTarget: null,
       });
     },
   );
+
+  it("rejects current domain_reload proposals without an explicit stored target", async () => {
+    const { adapter } = await fixture(
+      stored({ reloadImpact: "domain_reload" }),
+    );
+    await expect(adapter.load(proposalId)).rejects.toMatchObject({
+      code: "proposal_identity_mismatch",
+    });
+  });
 
   it("returns independent candidate buffers and validates the protected diff", async () => {
     const { adapter } = await fixture(stored());
@@ -199,7 +212,7 @@ function stored(
       expiresAt: "2026-07-21T00:00:00.000Z",
       risk: "high",
       validationPlan: ["validate"],
-      reloadImpact: options.reloadImpact ?? "domain_reload",
+      reloadImpact: options.reloadImpact ?? "none",
       sourceEvidence:
         "Protected /data proposal store and /homeassistant repository snapshot",
     },

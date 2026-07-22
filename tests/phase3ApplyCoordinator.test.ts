@@ -44,6 +44,7 @@ function proposal(
     diffSha256: sha256("diff"),
     risk: "high",
     impact: "domain_reload",
+    reloadTarget: "automation.reload",
     expiresAt: "2026-07-20T00:01:00.000Z",
     ...patch,
   };
@@ -58,6 +59,8 @@ function grant(snapshot = proposal()) {
     diffSha256: snapshot.diffSha256,
     operation: "apply",
     risk: snapshot.risk,
+    impact: snapshot.impact,
+    reloadTarget: snapshot.reloadTarget,
     issuedAt: "2026-07-20T00:00:00.000Z",
     expiresAt: "2026-07-20T00:01:00.000Z",
   };
@@ -142,6 +145,7 @@ interface FakeOptions {
   readonly snapshots?: Phase3ProposalSnapshot[];
   readonly validationFailure?: string;
   readonly reloadFailure?: boolean;
+  readonly reloadError?: unknown;
   readonly verificationFailure?: "candidate" | "checkpoint";
   readonly abortOnApply?: AbortController;
   readonly applyStatus?: FakeCommitStatus;
@@ -170,6 +174,7 @@ function ports(
   const live = { bytes: Buffer.from(oldBytes) };
   const journal = options.journal ?? new LoggingJournal();
   let restoreCalls = 0;
+  let reloadCalls = 0;
   let readDigestOverride: string | null | undefined;
   let candidateBuffer: Buffer | undefined;
   let sourceBuffer: Buffer | undefined;
@@ -277,9 +282,13 @@ function ports(
       },
     },
     reload: {
-      async reloadDomain() {
-        log.push("reload");
-        if (options.reloadFailure) throw new Error("reload failed");
+      async reloadDomain(request) {
+        reloadCalls += 1;
+        log.push(`reload:${request.target}`);
+        if (options.reloadError !== undefined && reloadCalls === 1)
+          throw options.reloadError;
+        if (options.reloadFailure && reloadCalls === 1)
+          throw new Error("reload failed");
       },
     },
     verification: {
@@ -343,10 +352,29 @@ describe("Phase 3A apply coordinator", () => {
       "checkpoint",
       `apply:${newSha}`,
       "validate:candidate_post_apply:false",
-      "reload",
+      "reload:automation.reload",
       "verify:candidate:false",
     ]);
     expect(fake.candidateBuffer()?.every((byte) => byte === 0)).toBe(true);
+  });
+
+  it("uses the direct reload_succeeded route for no-reload proposals", async () => {
+    const log: string[] = [];
+    const snapshot = proposal({ impact: "none", reloadTarget: null });
+    const fake = ports(log, { snapshots: [snapshot, snapshot] });
+    const record = await new Phase3ApplyCoordinator(fake).apply(
+      { proposalId: snapshot.proposalId, grantId: grant(snapshot).grantId },
+      context(),
+    );
+    expect(record.state).toBe("verification_succeeded");
+    expect(record.reloadTarget).toBeNull();
+    expect(log).not.toContain("reload:automation.reload");
+    expect(fake.journal.transitions).toContain(
+      "post_validation_succeeded->reload_succeeded",
+    );
+    expect(fake.journal.transitions).not.toContain(
+      "post_validation_succeeded->reload_intent",
+    );
   });
 
   it("fails closed on identity drift before source, approval, or apply effects", async () => {
@@ -367,6 +395,23 @@ describe("Phase 3A apply coordinator", () => {
     expect(sha256(fake.live.bytes)).toBe(oldSha);
   });
 
+  it("fails lock-time recheck when only the closed reload target drifts", async () => {
+    const log: string[] = [];
+    const fake = ports(log, {
+      snapshots: [proposal(), proposal({ reloadTarget: "script.reload" })],
+    });
+    await expect(
+      new Phase3ApplyCoordinator(fake).apply(
+        { proposalId: proposal().proposalId, grantId: grant().grantId },
+        context(),
+      ),
+    ).rejects.toMatchObject({ code: "proposal_identity_drift" });
+    expect(log).toEqual(["proposal", "policy", "lock", "proposal"]);
+    expect(log).not.toContain("checkpoint");
+    expect(log.some((entry) => entry.startsWith("apply:"))).toBe(false);
+    expect(log.some((entry) => entry.startsWith("reload:"))).toBe(false);
+    expect(sha256(fake.live.bytes)).toBe(oldSha);
+  });
   it("zeros source bytes when candidate loading fails before journal or apply", async () => {
     const log: string[] = [];
     const fake = ports(log, { loadCandidateFailure: true });
@@ -417,7 +462,13 @@ describe("Phase 3A apply coordinator", () => {
     );
     expect(record.state).toBe("rollback_verification_succeeded");
     expect(fake.journal.transitions).toContain(
-      "post_validation_succeeded->rollback_intent",
+      "reload_intent->rollback_intent",
+    );
+    expect(fake.journal.transitions).toContain(
+      "rollback_validation_succeeded->rollback_reload_intent",
+    );
+    expect(fake.journal.transitions).toContain(
+      "rollback_reload_intent->rollback_reload_succeeded",
     );
     expect(fake.journal.transitions).not.toContain(
       "apply_committed->rollback_intent",
@@ -425,6 +476,84 @@ describe("Phase 3A apply coordinator", () => {
     expect(sha256(fake.live.bytes)).toBe(oldSha);
   });
 
+  it.each([
+    {
+      name: "input stage",
+      error: Object.freeze({
+        code: "internal_failure",
+        stage: "input",
+      }),
+    },
+    {
+      name: "resolution stage",
+      error: Object.freeze({
+        code: "internal_failure",
+        stage: "resolution",
+      }),
+    },
+    {
+      name: "explicit not_attempted evidence",
+      error: Object.freeze({
+        code: "internal_failure",
+        stage: "dispatch",
+        dispatch: "not_attempted",
+      }),
+    },
+    {
+      name: "explicit not_dispatched evidence",
+      error: Object.freeze({
+        code: "internal_failure",
+        stage: "dispatch",
+        dispatch: "not_dispatched",
+      }),
+    },
+  ])(
+    "does not require rollback reload for proven no-dispatch: $name",
+    async ({ error }) => {
+      const log: string[] = [];
+      const fake = ports(log, { reloadError: error });
+      const record = await new Phase3ApplyCoordinator(fake).apply(
+        { proposalId: proposal().proposalId, grantId: grant().grantId },
+        context(),
+      );
+      expect(record.state).toBe("rollback_verification_succeeded");
+      expect(record.rollbackReloadRequired).toBe(false);
+      expect(log.filter((entry) => entry.startsWith("reload:"))).toHaveLength(
+        1,
+      );
+      expect(fake.journal.transitions).toContain(
+        "rollback_validation_succeeded->rollback_verification_succeeded",
+      );
+      expect(fake.journal.transitions).not.toContain(
+        "rollback_validation_succeeded->rollback_reload_intent",
+      );
+    },
+  );
+
+  it.each(["internal_failure", "operation_cancelled", "deadline_exceeded"])(
+    "requires rollback reload for generic dispatch-stage %s",
+    async (code) => {
+      const log: string[] = [];
+      const fake = ports(log, {
+        reloadError: Object.freeze({ code, stage: "dispatch" }),
+      });
+      const record = await new Phase3ApplyCoordinator(fake).apply(
+        { proposalId: proposal().proposalId, grantId: grant().grantId },
+        context(),
+      );
+      expect(record.state).toBe("rollback_verification_succeeded");
+      expect(record.rollbackReloadRequired).toBe(true);
+      expect(log.filter((entry) => entry.startsWith("reload:"))).toHaveLength(
+        2,
+      );
+      expect(fake.journal.transitions).toContain(
+        "rollback_validation_succeeded->rollback_reload_intent",
+      );
+      expect(fake.journal.transitions).toContain(
+        "rollback_reload_intent->rollback_reload_succeeded",
+      );
+    },
+  );
   it("rolls back candidate verification failure after reload without stale-CAS escape", async () => {
     const log: string[] = [];
     const fake = ports(log, { verificationFailure: "candidate" });

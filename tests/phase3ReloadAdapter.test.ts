@@ -8,13 +8,15 @@ import {
   phase3ReloadErrorCodes,
   phase3ReloadResolutionStatuses,
   phase3ReloadStages,
-  phase3ReloadTargets,
   type Phase3ReloadCatalogPort,
   type Phase3ReloadDispatchOutcome,
   type Phase3ReloadResolution,
   type Phase3ReloadServicePort,
-  type Phase3ReloadTarget,
 } from "../src/phase3/reloadAdapter.js";
+import {
+  phase3ReloadTargets,
+  type Phase3ReloadTarget,
+} from "../src/phase3/contracts.js";
 
 const activeContext = (): Phase3OperationContext => ({
   signal: new AbortController().signal,
@@ -24,6 +26,10 @@ const resolved = (target: Phase3ReloadTarget): Phase3ReloadResolution =>
   Object.freeze({ status: "resolved", target });
 const outcome = (status: Phase3ReloadDispatchOutcome) =>
   Object.freeze({ status });
+const request = (
+  path: string,
+  target: Phase3ReloadTarget = "automation.reload",
+) => Object.freeze({ path, target });
 
 function adapter(
   resolution: Phase3ReloadResolution,
@@ -67,7 +73,7 @@ describe("Phase 3H narrow reload adapter", () => {
       "outcome_unknown",
     ]);
     expect(phase3ReloadStages).toEqual(["input", "resolution", "dispatch"]);
-    expect(phase3ReloadErrorCodes).toHaveLength(9);
+    expect(phase3ReloadErrorCodes).toHaveLength(10);
     for (const value of [
       phase3ReloadTargets,
       phase3ReloadResolutionStatuses,
@@ -91,7 +97,7 @@ describe("Phase 3H narrow reload adapter", () => {
       const calls: string[] = [];
       const context = activeContext();
       const run = adapter(resolved(target), dispatch, calls).reloadDomain(
-        "packages/mixed-name.yaml",
+        request("packages/mixed-name.yaml", target),
         context,
       );
       if (dispatch === "completed") await expect(run).resolves.toBeUndefined();
@@ -135,7 +141,7 @@ describe("Phase 3H narrow reload adapter", () => {
           return outcome("completed");
         },
       },
-    ).reloadDomain("not-a-domain-name.yaml", activeContext());
+    ).reloadDomain(request("not-a-domain-name.yaml"), activeContext());
     await expect(run).rejects.toMatchObject({
       code,
       stage: "resolution",
@@ -145,6 +151,27 @@ describe("Phase 3H narrow reload adapter", () => {
     expect(dispatched).toBe(false);
   });
 
+  it("rejects a valid frozen catalog target mismatch without dispatch", async () => {
+    const calls: string[] = [];
+    const run = adapter(
+      resolved("script.reload"),
+      "completed",
+      calls,
+    ).reloadDomain(
+      request("automations/lights.yaml", "automation.reload"),
+      activeContext(),
+    );
+
+    await expect(run).rejects.toMatchObject({
+      code: "reload_target_mismatch",
+      stage: "resolution",
+      resolution: "mismatch",
+      dispatch: "not_attempted",
+      target: "automation.reload",
+    });
+    expect(calls.filter((call) => call.startsWith("resolve:"))).toHaveLength(1);
+    expect(calls.filter((call) => call.startsWith("reload:"))).toEqual([]);
+  });
   it("uses only the catalog result and passes the exact context", async () => {
     const context = activeContext();
     let catalogContext: Phase3OperationContext | undefined;
@@ -164,7 +191,10 @@ describe("Phase 3H narrow reload adapter", () => {
           return outcome("completed");
         },
       },
-    ).reloadDomain("automations/deceptive-name.yaml", context);
+    ).reloadDomain(
+      request("automations/deceptive-name.yaml", "scene.reload"),
+      context,
+    );
     expect(observedPath).toBe("automations/deceptive-name.yaml");
     expect(catalogContext).toBe(context);
     expect(serviceContext).toBe(context);
@@ -190,7 +220,7 @@ describe("Phase 3H narrow reload adapter", () => {
           return outcome("completed");
         },
       },
-    ).reloadDomain(path, activeContext());
+    ).reloadDomain(request(path), activeContext());
     await expect(run).rejects.toMatchObject({
       code: "invalid_path",
       stage: "input",
@@ -225,7 +255,7 @@ describe("Phase 3H narrow reload adapter", () => {
             return outcome("completed");
           },
         },
-      ).reloadDomain("configuration.yaml", context);
+      ).reloadDomain(request("configuration.yaml"), context);
       await expect(run).rejects.toMatchObject({
         code:
           kind === "cancelled" ? "operation_cancelled" : "deadline_exceeded",
@@ -255,7 +285,10 @@ describe("Phase 3H narrow reload adapter", () => {
           return outcome("completed");
         },
       },
-    ).reloadDomain("arbitrary/location.yaml", context);
+    ).reloadDomain(
+      request("arbitrary/location.yaml", "script.reload"),
+      context,
+    );
     await expect(run).rejects.toMatchObject({
       code: "operation_cancelled",
       stage: "dispatch",
@@ -282,7 +315,7 @@ describe("Phase 3H narrow reload adapter", () => {
             return outcome("completed");
           },
         },
-      ).reloadDomain("x.yaml", {
+      ).reloadDomain(request("x.yaml", "scene.reload"), {
         signal: new AbortController().signal,
         deadlineAt: 50,
       });
@@ -318,7 +351,7 @@ describe("Phase 3H narrow reload adapter", () => {
         dispatched = true;
         return outcome("completed");
       },
-    }).reloadDomain("x.yaml", activeContext());
+    }).reloadDomain(request("x.yaml", "scene.reload"), activeContext());
     await expect(run).rejects.toMatchObject({
       code: "internal_failure",
       stage: "resolution",
@@ -344,7 +377,7 @@ describe("Phase 3H narrow reload adapter", () => {
           },
         },
         service,
-      ).reloadDomain("x.yaml", activeContext()),
+      ).reloadDomain(request("x.yaml"), activeContext()),
     ).rejects.toMatchObject({
       code: "reload_outcome_unknown",
       stage: "dispatch",
@@ -366,7 +399,7 @@ describe("Phase 3H narrow reload adapter", () => {
         },
       },
     )
-      .reloadDomain("private/path.yaml", activeContext())
+      .reloadDomain(request("private/path.yaml"), activeContext())
       .catch((error: unknown) => error);
     expect(resolverError).toBeInstanceOf(Phase3ReloadError);
     expect(String(resolverError)).not.toContain(canary);
@@ -390,7 +423,10 @@ describe("Phase 3H narrow reload adapter", () => {
         },
       },
     )
-      .reloadDomain("private/path.yaml", activeContext())
+      .reloadDomain(
+        request("private/path.yaml", "script.reload"),
+        activeContext(),
+      )
       .catch((error: unknown) => error);
     expect(dispatchError).toMatchObject({
       code: "reload_outcome_unknown",
@@ -429,7 +465,7 @@ describe("Phase 3H narrow reload adapter", () => {
             return outcome("completed");
           },
         },
-      ).reloadDomain("x.yaml", activeContext()),
+      ).reloadDomain(request("x.yaml"), activeContext()),
     ).resolves.toBeUndefined();
     expect(dispatched).toBe(true);
   });
@@ -453,7 +489,7 @@ describe("Phase 3H narrow reload adapter", () => {
             return foreign;
           },
         },
-      ).reloadDomain("x.yaml", activeContext()),
+      ).reloadDomain(request("x.yaml", "scene.reload"), activeContext()),
     ).resolves.toBeUndefined();
   });
   it("sanitizes a hostile catalog proxy during descriptor parsing", async () => {
@@ -482,7 +518,7 @@ describe("Phase 3H narrow reload adapter", () => {
         },
       },
     )
-      .reloadDomain("x.yaml", activeContext())
+      .reloadDomain(request("x.yaml"), activeContext())
       .catch((failure: unknown) => failure);
     expect(error).toMatchObject({
       code: "internal_failure",
@@ -510,7 +546,7 @@ describe("Phase 3H narrow reload adapter", () => {
         },
       },
     )
-      .reloadDomain("x.yaml", activeContext())
+      .reloadDomain(request("x.yaml", "script.reload"), activeContext())
       .catch((failure: unknown) => failure);
     expect(error).toMatchObject({
       code: "reload_outcome_unknown",

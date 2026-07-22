@@ -19,6 +19,7 @@ const proposal: Phase3ProposalSnapshot = {
   diffSha256: sha256("diff"),
   risk: "high",
   impact: "domain_reload",
+  reloadTarget: "automation.reload",
   expiresAt: "2026-07-20T00:02:00.000Z",
 };
 
@@ -30,6 +31,8 @@ const grant = {
   diffSha256: proposal.diffSha256,
   operation: "apply",
   risk: proposal.risk,
+  impact: proposal.impact,
+  reloadTarget: proposal.reloadTarget,
   issuedAt: "2026-07-20T00:00:00.000Z",
   expiresAt: "2026-07-20T00:01:00.000Z",
 };
@@ -68,6 +71,22 @@ describe("Phase 3A injected approval grants", () => {
     ).rejects.toMatchObject({ code: "approval_wrong_binding" });
   });
 
+  it("rejects the same impact bound to a different closed reload target", async () => {
+    const port = new InjectedApprovalGrantPort([grant]);
+    await expect(
+      port.consumeApplyGrant(
+        grant.grantId,
+        { ...proposal, reloadTarget: "script.reload" },
+        { now, signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ code: "approval_wrong_binding" });
+    await expect(
+      port.consumeApplyGrant(grant.grantId, proposal, {
+        now,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toMatchObject({ grantId: grant.grantId });
+  });
   it("enforces the complete issuance and expiry window without consuming early attempts", async () => {
     const port = new InjectedApprovalGrantPort([grant]);
     const signal = new AbortController().signal;

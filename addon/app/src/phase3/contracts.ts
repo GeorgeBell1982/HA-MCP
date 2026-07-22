@@ -19,11 +19,14 @@ export const phase3TransactionStates = deepFreeze([
   "intent_prepared",
   "apply_committed",
   "post_validation_succeeded",
+  "reload_intent",
   "reload_succeeded",
   "verification_succeeded",
   "rollback_intent",
   "rollback_committed",
   "rollback_validation_succeeded",
+  "rollback_reload_intent",
+  "rollback_reload_succeeded",
   "rollback_verification_succeeded",
   "manual_recovery_required",
 ] as const);
@@ -54,6 +57,12 @@ export const phase3LegalTransitions = deepFreeze({
     "manual_recovery_required",
   ],
   post_validation_succeeded: [
+    "reload_intent",
+    "reload_succeeded",
+    "rollback_intent",
+    "manual_recovery_required",
+  ],
+  reload_intent: [
     "reload_succeeded",
     "rollback_intent",
     "manual_recovery_required",
@@ -70,6 +79,15 @@ export const phase3LegalTransitions = deepFreeze({
     "manual_recovery_required",
   ],
   rollback_validation_succeeded: [
+    "rollback_reload_intent",
+    "rollback_verification_succeeded",
+    "manual_recovery_required",
+  ],
+  rollback_reload_intent: [
+    "rollback_reload_succeeded",
+    "manual_recovery_required",
+  ],
+  rollback_reload_succeeded: [
     "rollback_verification_succeeded",
     "manual_recovery_required",
   ],
@@ -87,6 +105,43 @@ export function phase3CanTransition(
   return phase3LegalTransitions[from].includes(to as never);
 }
 
+export function phase3CanRecordTransition(
+  previous: Phase3TransactionRecord,
+  next: Phase3TransactionRecord,
+): boolean {
+  if (!phase3CanTransition(previous.state, next.state)) return false;
+  if (previous.reloadTarget !== next.reloadTarget) return false;
+  if (previous.rollbackReloadRequired && !next.rollbackReloadRequired)
+    return false;
+  if (
+    !previous.rollbackReloadRequired &&
+    next.rollbackReloadRequired &&
+    next.state !== "rollback_intent"
+  )
+    return false;
+  if (next.state === "rollback_intent") {
+    if (previous.state === "reload_intent")
+      return recordReloadContextIsLegal(next);
+    if (previous.state === "reload_succeeded")
+      return (
+        next.rollbackReloadRequired === (previous.reloadTarget !== null) &&
+        recordReloadContextIsLegal(next)
+      );
+    return !next.rollbackReloadRequired && recordReloadContextIsLegal(next);
+  }
+  if (previous.state === "post_validation_succeeded") {
+    if (next.state === "reload_intent") return next.reloadTarget !== null;
+    if (next.state === "reload_succeeded") return next.reloadTarget === null;
+  }
+  if (previous.state === "rollback_validation_succeeded") {
+    if (next.state === "rollback_reload_intent")
+      return next.rollbackReloadRequired && next.reloadTarget !== null;
+    if (next.state === "rollback_verification_succeeded")
+      return !next.rollbackReloadRequired;
+  }
+  return recordReloadContextIsLegal(next);
+}
+
 export const phase3CommitStatuses = deepFreeze([
   "before_commit",
   "committed",
@@ -102,6 +157,14 @@ export const phase3ImpactValues = deepFreeze([
 ] as const);
 
 export type Phase3Impact = (typeof phase3ImpactValues)[number];
+
+export const phase3ReloadTargets = deepFreeze([
+  "automation.reload",
+  "script.reload",
+  "scene.reload",
+] as const);
+
+export type Phase3ReloadTarget = (typeof phase3ReloadTargets)[number];
 
 export const phase3RiskValues = deepFreeze(["low", "high"] as const);
 export type Phase3Risk = (typeof phase3RiskValues)[number];
@@ -151,9 +214,11 @@ export const phase3ProposalSnapshotSchema = z
     diffSha256: sha256Schema,
     risk: z.enum(phase3RiskValues),
     impact: z.enum(phase3ImpactValues),
+    reloadTarget: z.enum(phase3ReloadTargets).nullable(),
     expiresAt: z.string().datetime(),
   })
-  .strict();
+  .strict()
+  .superRefine(assertReloadTargetBinding);
 
 export type Phase3ProposalSnapshot = z.infer<
   typeof phase3ProposalSnapshotSchema
@@ -168,6 +233,8 @@ export const phase3ApprovalGrantSchema = z
     diffSha256: sha256Schema,
     operation: z.literal("apply"),
     risk: z.enum(phase3RiskValues),
+    impact: z.enum(phase3ImpactValues),
+    reloadTarget: z.enum(phase3ReloadTargets).nullable(),
     issuedAt: z.string().datetime(),
     expiresAt: z.string().datetime(),
   })
@@ -179,6 +246,7 @@ export const phase3ApprovalGrantSchema = z
         path: ["expiresAt"],
         message: "Grant must expire after issuance",
       });
+    assertReloadTargetBinding(value, context);
   });
 
 export type Phase3ApprovalGrant = z.infer<typeof phase3ApprovalGrantSchema>;
@@ -214,7 +282,7 @@ export type Phase3StructuredFailure = z.infer<
 
 export const phase3TransactionRecordSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     transactionId: z.string().uuid(),
     proposalId: z.string().uuid(),
     proposalStorageSha256: sha256Schema,
@@ -225,6 +293,8 @@ export const phase3TransactionRecordSchema = z
     checkpointId: z.string().uuid(),
     checkpointSha256: sha256Schema,
     impact: z.enum(phase3ImpactValues),
+    reloadTarget: z.enum(phase3ReloadTargets).nullable(),
+    rollbackReloadRequired: z.boolean(),
     state: z.enum(phase3TransactionStates),
     priorState: z.enum(phase3TransactionStates).nullable(),
     version: z.number().int().nonnegative(),
@@ -232,7 +302,11 @@ export const phase3TransactionRecordSchema = z
     updatedAt: z.string().datetime(),
     failure: phase3StructuredFailureSchema.nullable(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    assertReloadTargetBinding(value, context);
+    assertTransactionReloadContext(value, context);
+  });
 
 export type Phase3TransactionRecord = z.infer<
   typeof phase3TransactionRecordSchema
@@ -248,6 +322,7 @@ export interface Phase3JournalPort {
     state: Phase3TransactionState,
     patch?: Readonly<{
       failure?: Phase3StructuredFailure | null;
+      rollbackReloadRequired?: boolean;
     }>,
   ): Promise<Phase3TransactionRecord>;
   load(transactionId: string): Promise<Phase3TransactionRecord | null>;
@@ -255,14 +330,16 @@ export interface Phase3JournalPort {
 }
 
 export const phase3JournalContract = deepFreeze({
-  schemaVersion: 1,
+  schemaVersion: 2,
   durability:
     "create-intent and every transition are durable compare-and-swap writes",
   versioning: "version increments exactly once per accepted transition",
   reconciliation:
     "exact transaction reads permit bounded compare-and-swap conflict reconciliation without weakening immutable identity",
   identity:
-    "transactionId, proposalId, proposalStorageSha256, path, expectedSha256, candidateSha256, diffSha256, checkpointId, and checkpointSha256 are immutable",
+    "transactionId, proposalId, proposalStorageSha256, path, expectedSha256, candidateSha256, diffSha256, checkpointId, checkpointSha256, impact, and reloadTarget are immutable",
+  rollbackReloadRequired:
+    "rollbackReloadRequired starts false and can only change false-to-true on rollback_intent; it is not immutable identity",
   commitPoint:
     "AtomicApplyPort.replace reaches the live commit point only at atomic rename; commit_unknown is treated as possibly committed",
   transitionOrdering: [
@@ -314,9 +391,14 @@ export const phase3RecoveryTable = deepFreeze({
     expected_or_checkpoint: "complete_rollback_validation_verification",
     other_or_missing: "manual_recovery_required",
   },
+  reload_intent: {
+    candidate: "rollback_with_reload_required",
+    expected_or_checkpoint: "complete_rollback_validation_reload_verification",
+    other_or_missing: "manual_recovery_required",
+  },
   reload_succeeded: {
-    candidate: "rollback",
-    expected_or_checkpoint: "complete_rollback_validation_verification",
+    candidate: "rollback_with_reload_required",
+    expected_or_checkpoint: "complete_rollback_validation_reload_verification",
     other_or_missing: "manual_recovery_required",
   },
   rollback_intent: {
@@ -330,6 +412,16 @@ export const phase3RecoveryTable = deepFreeze({
     other_or_missing: "manual_recovery_required",
   },
   rollback_validation_succeeded: {
+    candidate: "manual_recovery_required",
+    expected_or_checkpoint: "complete_rollback_reload_or_verification",
+    other_or_missing: "manual_recovery_required",
+  },
+  rollback_reload_intent: {
+    candidate: "manual_recovery_required",
+    expected_or_checkpoint: "manual_recovery_required",
+    other_or_missing: "manual_recovery_required",
+  },
+  rollback_reload_succeeded: {
     candidate: "manual_recovery_required",
     expected_or_checkpoint: "complete_rollback_verification",
     other_or_missing: "manual_recovery_required",
@@ -377,4 +469,67 @@ export function assertPhase3TransactionRecord(
   value: unknown,
 ): Phase3TransactionRecord {
   return phase3TransactionRecordSchema.parse(value);
+}
+
+function assertTransactionReloadContext(
+  value: Phase3TransactionRecord,
+  context: z.RefinementCtx,
+): void {
+  if (recordReloadContextIsLegal(value)) return;
+  context.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["state"],
+    message:
+      "Transaction reload state is inconsistent with durable reload context",
+  });
+}
+
+function recordReloadContextIsLegal(
+  value: Pick<
+    Phase3TransactionRecord,
+    "priorState" | "state" | "reloadTarget" | "rollbackReloadRequired"
+  >,
+): boolean {
+  if (value.rollbackReloadRequired && value.reloadTarget === null) return false;
+  if (value.state === "reload_intent") return value.reloadTarget !== null;
+  if (
+    value.state === "rollback_reload_intent" ||
+    value.state === "rollback_reload_succeeded"
+  )
+    return value.rollbackReloadRequired && value.reloadTarget !== null;
+  if (
+    value.priorState === "post_validation_succeeded" &&
+    value.state === "reload_succeeded"
+  )
+    return value.reloadTarget === null;
+  if (
+    value.priorState === "rollback_validation_succeeded" &&
+    value.state === "rollback_verification_succeeded"
+  )
+    return !value.rollbackReloadRequired;
+  return true;
+}
+
+function assertReloadTargetBinding(
+  value: {
+    readonly impact: Phase3Impact;
+    readonly reloadTarget: Phase3ReloadTarget | null;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (value.impact === "domain_reload") {
+    if (value.reloadTarget === null)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["reloadTarget"],
+        message: "Domain reload impact requires an explicit reload target",
+      });
+    return;
+  }
+  if (value.reloadTarget !== null)
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["reloadTarget"],
+      message: "Reload target is only valid for domain reload impact",
+    });
 }

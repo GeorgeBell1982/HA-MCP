@@ -20,7 +20,7 @@ const phase3Files = [
 
 const phase3NativeFiles = ["openat2-replace.c"] as const;
 
-describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H isolation", () => {
+describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I isolation", () => {
   it("does not register tools or enable writes", () => {
     const phase1Names = ReadTools.prototype.names.call({});
     expect(phase1Names.some((name) => name.includes("phase3"))).toBe(false);
@@ -30,7 +30,7 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H isolation", () => {
     expect(phase3Contract.liveAdapters).toBe("absent");
   });
 
-  it("keeps the Phase 3B/3C/3D/3E/3F/3G/3H adapters out of runtime composition", () => {
+  it("keeps the Phase 3B/3C/3D/3E/3F/3G/3H/3I adapters out of runtime composition", () => {
     for (const path of [
       "src/index.ts",
       "src/phase2Activation.ts",
@@ -64,7 +64,7 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H isolation", () => {
     }
   });
 
-  it("keeps root and add-on Phase 3A/3B/3C/3D/3E/3F/3G/3H source mirrors exact", () => {
+  it("keeps root and add-on Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I source mirrors exact", () => {
     for (const file of phase3Files) {
       const root = readFileSync(`src/phase3/${file}`, "utf8");
       const addon = readFileSync(`addon/app/src/phase3/${file}`, "utf8");

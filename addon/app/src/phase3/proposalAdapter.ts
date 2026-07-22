@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import type { Phase3ProposalPort } from "./applyCoordinator.js";
-import { phase3ProposalSnapshotSchema } from "./contracts.js";
+import {
+  phase3ProposalSnapshotSchema,
+  phase3ReloadTargets,
+  type Phase3ReloadTarget,
+} from "./contracts.js";
 import type {
   ProtectedProposalStore,
   StoredProposal,
@@ -31,6 +35,7 @@ export class ProtectedPhase3ProposalAdapter implements Phase3ProposalPort {
       diffSha256: stored.public.diffSha256,
       risk: stored.public.risk,
       impact: stored.public.reloadImpact,
+      reloadTarget: phase3ReloadTarget(stored),
       expiresAt: stored.public.expiresAt,
     });
     if (!parsed.success)
@@ -97,6 +102,15 @@ function decodeProtectedText(value: string): Buffer {
 
 function digest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function phase3ReloadTarget(stored: StoredProposal): Phase3ReloadTarget | null {
+  if (stored.public.reloadImpact !== "domain_reload") return null;
+  const target = (stored.public as { readonly reloadTarget?: unknown })
+    .reloadTarget;
+  if ((phase3ReloadTargets as readonly unknown[]).includes(target))
+    return target as Phase3ReloadTarget;
+  return null;
 }
 
 function identityError(message: string): Phase3ProposalAdapterError {

@@ -97,7 +97,9 @@ export class InjectedApprovalGrantPort implements Phase3ApprovalPort {
       grant.candidateSha256 !== proposal.candidateSha256 ||
       grant.diffSha256 !== proposal.diffSha256 ||
       grant.operation !== "apply" ||
-      grant.risk !== proposal.risk
+      grant.risk !== proposal.risk ||
+      grant.impact !== proposal.impact ||
+      grant.reloadTarget !== proposal.reloadTarget
     )
       throw new Phase3ApprovalError(
         "approval_wrong_binding",

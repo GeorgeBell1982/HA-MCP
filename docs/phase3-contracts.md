@@ -4,9 +4,9 @@ Phase 3A is an unregistered, adapter-neutral guarded-application core. It has no
 
 ## Transaction Journal
 
-Transactions use schema version 1 and the exact states:
+Transactions use schema version 2 and the exact states:
 
-`intent_prepared`; `apply_committed`; `post_validation_succeeded`; `reload_succeeded`; `verification_succeeded`; `rollback_intent`; `rollback_committed`; `rollback_validation_succeeded`; `rollback_verification_succeeded`; `manual_recovery_required`.
+`intent_prepared`; `apply_committed`; `post_validation_succeeded`; `reload_intent`; `reload_succeeded`; `verification_succeeded`; `rollback_intent`; `rollback_committed`; `rollback_validation_succeeded`; `rollback_reload_intent`; `rollback_reload_succeeded`; `rollback_verification_succeeded`; `manual_recovery_required`.
 
 Terminal outcomes are:
 
@@ -14,11 +14,11 @@ Terminal outcomes are:
 - `rollback_verification_succeeded`: rolled_back
 - `manual_recovery_required`: blocked
 
-Each durable record binds `transactionId`, `proposalId`, `proposalStorageSha256`, canonical relative `path`, `expectedSha256`, `candidateSha256`, `diffSha256`, `checkpointId`, `checkpointSha256`, `impact`, `version`, `priorState`, timestamps, and structured failure. The journal port is compare-and-swap by `transactionId` and `version`; every accepted transition increments `version` once and is durable before the next effect. Exact transaction reads support bounded CAS reconciliation; immutable identity is rechecked before retrying manual recovery, and repeated or unresolvable conflicts surface a distinct fail-closed manual-attention error. Journal adapters must enforce the shared legal transition adjacency: `intent_prepared -> apply_committed|rollback_intent|manual_recovery_required`; `apply_committed -> post_validation_succeeded|rollback_intent|manual_recovery_required`; `post_validation_succeeded -> reload_succeeded|rollback_intent|manual_recovery_required`; `reload_succeeded -> verification_succeeded|rollback_intent|manual_recovery_required`; `rollback_intent -> rollback_committed|manual_recovery_required`; `rollback_committed -> rollback_validation_succeeded|manual_recovery_required`; `rollback_validation_succeeded -> rollback_verification_succeeded|manual_recovery_required`. Terminal states have no legal outgoing transition. All exported exact state arrays, transition adjacency arrays, and recovery tables are recursively frozen at runtime so consumers cannot weaken journal legality.
+Each durable record binds `transactionId`, `proposalId`, `proposalStorageSha256`, canonical relative `path`, `expectedSha256`, `candidateSha256`, `diffSha256`, `checkpointId`, `checkpointSha256`, `impact`, immutable `reloadTarget`, mutable monotonic `rollbackReloadRequired`, `version`, `priorState`, timestamps, and structured failure. The journal port is compare-and-swap by `transactionId` and `version`; every accepted transition increments `version` once and is durable before the next effect. Exact transaction reads support bounded CAS reconciliation; immutable identity is rechecked before retrying manual recovery, while `rollbackReloadRequired` may only change from false to true on `rollback_intent`. Journal adapters must enforce the shared legal transition adjacency including durable candidate reload `post_validation_succeeded -> reload_intent -> reload_succeeded` for targeted reloads, direct `post_validation_succeeded -> reload_succeeded` for no-reload changes, and rollback reload `rollback_validation_succeeded -> rollback_reload_intent -> rollback_reload_succeeded -> rollback_verification_succeeded` when required. Terminal states have no legal outgoing transition. Version 1 journal envelopes are rejected non-destructively; checkpoint envelopes remain version 1. All exported exact state arrays, transition adjacency arrays, and recovery tables are recursively frozen at runtime so consumers cannot weaken journal legality.
 
 ## Approval Grants
 
-Approval grants are injected only. Phase 3A provides no persistence, CLI, or producer for grants. A single-use apply grant must bind `grantId`, `proposalId`, `proposalStorageSha256`, `candidateSha256`, `diffSha256`, `operation=apply`, `risk`, `issuedAt`, and `expiresAt`.
+Approval grants are injected only. Phase 3A provides no persistence, CLI, or producer for grants. A single-use apply grant must bind `grantId`, `proposalId`, `proposalStorageSha256`, `candidateSha256`, `diffSha256`, `operation=apply`, `risk`, exact `impact`, exact `reloadTarget`, `issuedAt`, and `expiresAt`.
 
 The approval port requires the exact pending proposal identity and fails closed before `issuedAt`, at expiry (`now >= expiresAt`), on replay, wrong binding, proposal storage drift, candidate or diff drift, discarded/expired/nonpending proposals, and cancellation before consumption.
 
@@ -37,7 +37,7 @@ The coordinator order is:
 9. Atomically apply candidate.
 10. Durably transition `apply_committed`.
 11. Run post-apply validation.
-12. Reload narrowly only for `domain_reload`.
+12. Durably enter `reload_intent` and dispatch the exact stored reload target only when `reloadTarget` is non-null; no-reload changes transition directly to `reload_succeeded`.
 13. Verify and terminally transition `verification_succeeded`.
 
 Policy denies disabled writes, restart-required impact, missing apply or domain reload capability, nonpending/expired/discarded proposal state, invalid impact, and identity drift. Denials happen before effects.
@@ -46,7 +46,7 @@ Policy denies disabled writes, restart-required impact, missing apply or domain 
 
 ## Rollback And Cancellation
 
-Precommit cancellation has no live effect. After the apply commit point, caller cancellation is ignored and the coordinator uses an internal context to finish verification or rollback. Every post-commit failure carries the latest durable record forward, writes `rollback_intent` before restoring the checkpoint, then writes `rollback_committed`, runs rollback validation, writes `rollback_validation_succeeded`, runs rollback verification, and terminally writes `rollback_verification_succeeded`. Immediately after every checkpoint load, the coordinator recomputes SHA-256 and compares it with `checkpointSha256` before any restore, rollback validation, or rollback verification; mismatch writes `manual_recovery_required` from the latest legal state with no restore attempt. Rollback ambiguity or failure writes `manual_recovery_required`. Rollback restore treats returned and thrown `before_commit`, `committed`, and `commit_unknown` classifications explicitly: `committed` completes rollback validation and verification; `before_commit` moves to manual recovery from `rollback_intent`; `commit_unknown` reads the live digest and only claims `rollback_committed` when the digest is expected/checkpoint, otherwise it requires manual recovery. There is no implicit restart.
+Precommit cancellation has no live effect. After the apply commit point, caller cancellation is ignored and the coordinator uses an internal context to finish verification or rollback. Every post-commit failure carries the latest durable record forward, writes `rollback_intent` before restoring the checkpoint, and sets `rollbackReloadRequired` only when candidate reload dispatch may have started. It then writes `rollback_committed`, runs rollback validation, writes `rollback_validation_succeeded`, performs one exact rollback reload through `rollback_reload_intent -> rollback_reload_succeeded` when required, runs rollback verification, and terminally writes `rollback_verification_succeeded`. Immediately after every checkpoint load, the coordinator recomputes SHA-256 and compares it with `checkpointSha256` before any restore, rollback validation, or rollback verification; mismatch writes `manual_recovery_required` from the latest legal state with no restore attempt. Rollback ambiguity or failure writes `manual_recovery_required`. Rollback restore treats returned and thrown `before_commit`, `committed`, and `commit_unknown` classifications explicitly: `committed` completes rollback validation and verification; `before_commit` moves to manual recovery from `rollback_intent`; `commit_unknown` reads the live digest and only claims `rollback_committed` when the digest is expected/checkpoint, otherwise it requires manual recovery. There is no implicit restart.
 
 ## Locks
 
@@ -57,9 +57,12 @@ Resource locks validate canonical relative paths, serialize the same path, allow
 Startup recovery never reapplies the candidate. It returns one `Phase3RecoveryResult` per inspected record with `transactionId`, terminal state, observed digest classification, observed digest value, disposition (`verified`, `rolled_back`, or `manual_attention_required`), and the durable record. It reads the current live digest and follows the durable table:
 
 - `intent_prepared`: expected/checkpoint routes through no-live-effect rollback completion; candidate restores checkpoint; other or missing writes manual recovery.
-- `apply_committed`, `post_validation_succeeded`, `reload_succeeded`, `rollback_intent`: candidate restores checkpoint; checkpoint routes through rollback validation and verification without restore; other or missing writes manual recovery.
-- `rollback_committed`: checkpoint completes rollback validation and verification; candidate, other, or missing writes manual recovery.
-- `rollback_validation_succeeded`: checkpoint completes rollback verification only; candidate, other, or missing writes manual recovery without moving backward to `rollback_committed`.
+- `apply_committed`, `post_validation_succeeded`, and `rollback_intent`: candidate restores checkpoint; checkpoint routes through rollback validation and verification without restore; other or missing writes manual recovery.
+- `reload_intent` and `reload_succeeded`: candidate restores checkpoint and requires rollback reload; checkpoint routes through rollback validation plus rollback reload when required; other or missing writes manual recovery.
+- `rollback_committed`: checkpoint completes rollback validation and rollback reload or verification; candidate, other, or missing writes manual recovery.
+- `rollback_validation_succeeded`: checkpoint completes rollback reload when required or rollback verification only; candidate, other, or missing writes manual recovery without moving backward to `rollback_committed`.
+- `rollback_reload_intent`: startup recovery requires manual recovery because dispatch completion is uncertain.
+- `rollback_reload_succeeded`: checkpoint completes rollback verification only; candidate, other, or missing writes manual recovery.
 - `verification_succeeded`: candidate is verified with no effect; expected/checkpoint, other, or missing digests require external manual attention without changing the terminal transaction.
 - `rollback_verification_succeeded`: checkpoint is rolled back with no effect; drift requires external manual attention without changing the terminal transaction.
 - `manual_recovery_required`: no effect.
@@ -70,7 +73,7 @@ Startup recovery never reapplies the candidate. It returns one `Phase3RecoveryRe
 
 Phase 3B adds one unregistered read-only adapter from the existing protected Phase 2 proposal store to Phase3ProposalPort. Exact lookup validates a canonical lowercase UUID, reads only the corresponding protected file, applies the existing no-follow, private-file, single-link, stable-identity, strict-schema, canonical-JSON, and storage-digest checks, and never scans or quarantines. Raw file bytes are zeroed after parsing.
 
-The adapter preserves proposal state, maps reloadImpact to impact, binds the Phase 2 storage digest as proposalStorageSha256, and requires public/protected proposal IDs, idempotency keys, candidate digests, and diff digests to agree. Candidate and exact-diff base64 are canonical, strict UTF-8, and digest-verified before a fresh candidate buffer is returned; temporary protected buffers are zeroed. Stable errors reveal no protected content.
+The adapter preserves proposal state, maps current Phase 2 `none` and `restart_required` reloadImpact values to a null reload target, binds the Phase 2 storage digest as proposalStorageSha256, and requires public/protected proposal IDs, idempotency keys, candidate digests, and diff digests to agree. Current Phase 2 `domain_reload` proposals without an explicit stored target are rejected; the adapter never infers a target from the path. Candidate and exact-diff base64 are canonical, strict UTF-8, and digest-verified before a fresh candidate buffer is returned; temporary protected buffers are zeroed. Stable errors reveal no protected content.
 
 Phase 3B does not add a journal, checkpoint, source, write, validation, reload, verification, approval producer, CLI, MCP tool, registry entry, configuration flag, package change, mapping change, or runtime import. Live writes remain disabled.
 
@@ -134,10 +137,10 @@ Phase 3G remains an inert source island. HA API validation, deployment-aware val
 
 ## Phase 3H Narrow Domain Reload Adapter
 
-Phase 3H adds an unregistered `NarrowPhase3ReloadAdapter` implementation of `Phase3ReloadPort`. It does not infer domains from repository paths. An injected catalog receives the canonical Phase 3 path and exact operation context and must return an exact frozen closed resolution: one of the allowlisted targets `automation.reload`, `script.reload`, or `scene.reload`, or `unavailable`, `ambiguous`, or `unhealthy`. Only one valid resolved target can reach dispatch.
+Phase 3I keeps the unregistered `NarrowPhase3ReloadAdapter` implementation of `Phase3ReloadPort` target-exact. It does not infer domains from repository paths. The caller supplies the durable `{ path, target }` reload request; an injected catalog re-resolves the canonical Phase 3 path and exact operation context and must return the same frozen closed target, or `unavailable`, `ambiguous`, or `unhealthy`. Unavailable, ambiguous, unhealthy, malformed, mismatch, and not-dispatched outcomes are known no-dispatch before rollback reload is required; post-service throws and malformed dispatch results are outcome-unknown.
 
 The injected service boundary accepts only the closed target union and returns an exact frozen outcome of `completed`, `not_dispatched`, or `outcome_unknown`. The adapter imports no generic Home Assistant REST or WebSocket request client, performs no retry or fallback, and exposes no broad reload or restart operation. It validates the path and active context before catalog resolution and rechecks cancellation and deadline immediately before dispatch. Once dispatch starts, the boundary owns the exact context and outcome classification; thrown or malformed dispatch results are conservatively `outcome_unknown`.
 
 `Phase3ReloadError` extends `Phase3CoordinatorError` so durable coordinator failure evidence preserves its closed code. Its public evidence is limited to closed stage, resolution, dispatch, and optional allowlisted target classifications with a fixed message. Requested paths, upstream messages, causes, tokens, and response content are not retained or disclosed.
 
-Phase 3H remains an inert source island. It does not change `phase3Contract`, coordinator states, runtime composition, configuration, registry, package/container content, add-on mappings, or write enablement, and it performs no live Home Assistant access or mutation. Activation is explicitly blocked until a later slice adds durable reload intent/outcome recovery and reloads restored checkpoint bytes after an uncertain or failed candidate reload. Without that symmetry, the current byte-only rollback can leave Home Assistant in-memory configuration divergent from restored disk state.
+Phase 3I remains an inert source island. It changes only Phase 3 source contracts, coordinator recovery foundations, tests, and docs; it does not change `phase3Contract`, runtime composition, configuration, registry, package/container content, add-on mappings, write enablement, or live Home Assistant access. There is still no verification adapter, activation, live reload wiring, restart path, deployment change, commit, push, or release.

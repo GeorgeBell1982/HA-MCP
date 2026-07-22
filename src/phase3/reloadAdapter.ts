@@ -3,14 +3,8 @@ import {
   type Phase3OperationContext,
   type Phase3ReloadPort,
 } from "./applyCoordinator.js";
+import { phase3ReloadTargets, type Phase3ReloadTarget } from "./contracts.js";
 import { canonicalPhase3Path } from "./resourceLocks.js";
-
-export const phase3ReloadTargets = Object.freeze([
-  "automation.reload",
-  "script.reload",
-  "scene.reload",
-] as const);
-export type Phase3ReloadTarget = (typeof phase3ReloadTargets)[number];
 
 export const phase3ReloadResolutionStatuses = Object.freeze([
   "resolved",
@@ -43,6 +37,7 @@ export const phase3ReloadErrorCodes = Object.freeze([
   "reload_unavailable",
   "reload_ambiguous",
   "reload_catalog_unhealthy",
+  "reload_target_mismatch",
   "reload_not_dispatched",
   "reload_outcome_unknown",
   "internal_failure",
@@ -73,7 +68,10 @@ export interface Phase3ReloadServicePort {
   ): Promise<Phase3ReloadDispatchResult>;
 }
 
-type ResolutionEvidence = Phase3ReloadResolutionStatus | "not_attempted";
+type ResolutionEvidence =
+  | Phase3ReloadResolutionStatus
+  | "mismatch"
+  | "not_attempted";
 type DispatchEvidence = Phase3ReloadDispatchOutcome | "not_attempted";
 
 export class Phase3ReloadError extends Phase3CoordinatorError {
@@ -99,10 +97,11 @@ export class NarrowPhase3ReloadAdapter implements Phase3ReloadPort {
   ) {}
 
   async reloadDomain(
-    path: string,
+    request: Readonly<{ path: string; target: Phase3ReloadTarget }>,
     context: Phase3OperationContext,
   ): Promise<void> {
-    const canonicalPath = canonicalReloadPath(path);
+    const canonicalPath = canonicalReloadPath(request.path);
+    const target = canonicalReloadTarget(request.target);
     assertActive(context, "input");
 
     let resolution: Phase3ReloadResolution;
@@ -121,14 +120,19 @@ export class NarrowPhase3ReloadAdapter implements Phase3ReloadPort {
 
     if (resolution.status !== "resolved")
       throw resolutionError(resolution.status);
+    if (resolution.target !== target)
+      throw new Phase3ReloadError(
+        "reload_target_mismatch",
+        "resolution",
+        "mismatch",
+        "not_attempted",
+        target,
+      );
 
-    assertActive(context, "dispatch", resolution.target);
+    assertActive(context, "dispatch", target);
     let result: Phase3ReloadDispatchResult;
     try {
-      const foreignResult = await this.service.reload(
-        resolution.target,
-        context,
-      );
+      const foreignResult = await this.service.reload(target, context);
       const parsedResult = parseDispatchResult(foreignResult);
       if (parsedResult === undefined)
         throw new Error("invalid reload dispatch result");
@@ -139,7 +143,7 @@ export class NarrowPhase3ReloadAdapter implements Phase3ReloadPort {
         "dispatch",
         "resolved",
         "outcome_unknown",
-        resolution.target,
+        target,
       );
     }
 
@@ -151,9 +155,15 @@ export class NarrowPhase3ReloadAdapter implements Phase3ReloadPort {
       "dispatch",
       "resolved",
       result.status,
-      resolution.target,
+      target,
     );
   }
+}
+
+function canonicalReloadTarget(target: Phase3ReloadTarget): Phase3ReloadTarget {
+  if ((phase3ReloadTargets as readonly unknown[]).includes(target))
+    return target;
+  throw new Phase3ReloadError("internal_failure", "input");
 }
 
 function canonicalReloadPath(path: string): string {

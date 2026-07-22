@@ -38,11 +38,14 @@ describe("Phase 3A contracts", () => {
       "intent_prepared",
       "apply_committed",
       "post_validation_succeeded",
+      "reload_intent",
       "reload_succeeded",
       "verification_succeeded",
       "rollback_intent",
       "rollback_committed",
       "rollback_validation_succeeded",
+      "rollback_reload_intent",
+      "rollback_reload_succeeded",
       "rollback_verification_succeeded",
       "manual_recovery_required",
     ]);
@@ -82,7 +85,7 @@ describe("Phase 3A contracts", () => {
 
   it("requires strict durable transaction records", () => {
     const record = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       transactionId,
       proposalId,
       proposalStorageSha256: digest,
@@ -93,6 +96,8 @@ describe("Phase 3A contracts", () => {
       checkpointId: "33333333-3333-4333-8333-333333333333",
       checkpointSha256: digest,
       impact: "domain_reload",
+      reloadTarget: "automation.reload",
+      rollbackReloadRequired: false,
       state: "intent_prepared",
       priorState: null,
       version: 0,
@@ -115,6 +120,46 @@ describe("Phase 3A contracts", () => {
       phase3TransactionRecordSchema.safeParse({ ...record, extra: true })
         .success,
     ).toBe(false);
+    expect(
+      phase3TransactionRecordSchema.safeParse({
+        ...record,
+        impact: "none",
+        reloadTarget: null,
+        rollbackReloadRequired: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      phase3TransactionRecordSchema.safeParse({
+        ...record,
+        state: "reload_succeeded",
+        priorState: "post_validation_succeeded",
+      }).success,
+    ).toBe(false);
+    expect(
+      phase3TransactionRecordSchema.safeParse({
+        ...record,
+        impact: "none",
+        reloadTarget: null,
+        state: "reload_intent",
+        priorState: "post_validation_succeeded",
+      }).success,
+    ).toBe(false);
+    expect(
+      phase3TransactionRecordSchema.safeParse({
+        ...record,
+        state: "rollback_verification_succeeded",
+        priorState: "rollback_validation_succeeded",
+        rollbackReloadRequired: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      phase3TransactionRecordSchema.safeParse({
+        ...record,
+        state: "rollback_reload_intent",
+        priorState: "rollback_validation_succeeded",
+        rollbackReloadRequired: false,
+      }).success,
+    ).toBe(false);
   });
 
   it("binds approval grants to apply only", () => {
@@ -126,6 +171,8 @@ describe("Phase 3A contracts", () => {
       diffSha256: "c".repeat(64),
       operation: "apply",
       risk: "high",
+      impact: "domain_reload",
+      reloadTarget: "automation.reload",
       issuedAt: "2026-07-20T00:00:00.000Z",
       expiresAt: "2026-07-20T00:01:00.000Z",
     };
@@ -148,6 +195,7 @@ describe("Phase 3A contracts", () => {
     expect(phase3JournalContract.legalTransitions).toBe(phase3LegalTransitions);
     expect(phase3LegalTransitions.verification_succeeded).toEqual([]);
     expect(phase3LegalTransitions.rollback_validation_succeeded).toEqual([
+      "rollback_reload_intent",
       "rollback_verification_succeeded",
       "manual_recovery_required",
     ]);

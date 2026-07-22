@@ -5,6 +5,7 @@ import {
 } from "./approval.js";
 import {
   assertPhase3TransactionRecord,
+  phase3CanRecordTransition,
   phase3CanTransition,
   phase3NonTerminalStates,
   sha256,
@@ -12,6 +13,7 @@ import {
   type Phase3JournalPort,
   type Phase3ProposalSnapshot,
   type Phase3RecoveryDisposition,
+  type Phase3ReloadTarget,
   type Phase3RecoveryResult,
   type Phase3StructuredFailure,
   type Phase3TransactionRecord,
@@ -136,7 +138,10 @@ export interface Phase3AtomicApplyPort {
 }
 
 export interface Phase3ReloadPort {
-  reloadDomain(path: string, context: Phase3OperationContext): Promise<void>;
+  reloadDomain(
+    request: Readonly<{ path: string; target: Phase3ReloadTarget }>,
+    context: Phase3OperationContext,
+  ): Promise<void>;
 }
 
 export interface Phase3VerificationPort {
@@ -336,8 +341,14 @@ export class Phase3ApplyCoordinator {
         context,
       );
       current = await this.transition(current, "post_validation_succeeded");
-      if (current.impact === "domain_reload")
-        await this.ports.reload.reloadDomain(current.path, context);
+      if (current.reloadTarget !== null) {
+        const reloadTarget = current.reloadTarget;
+        current = await this.transition(current, "reload_intent");
+        await this.ports.reload.reloadDomain(
+          { path: current.path, target: reloadTarget },
+          context,
+        );
+      }
       current = await this.transition(current, "reload_succeeded");
       await this.ports.verification.verify(current, "candidate", context);
       return await this.transition(current, "verification_succeeded");
@@ -353,19 +364,26 @@ export class Phase3ApplyCoordinator {
     const context = internalContext();
     let current = record;
     try {
-      if (current.state !== "rollback_intent")
+      if (current.state !== "rollback_intent") {
+        const patch: {
+          failure: Phase3StructuredFailure;
+          rollbackReloadRequired?: true;
+        } = {
+          failure: this.failure(
+            "rollback",
+            errorCode(cause),
+            errorMessage(cause),
+          ),
+        };
+        if (shouldRequireRollbackReload(current, cause))
+          patch.rollbackReloadRequired = true;
         current = await this.ports.journal.transition(
           current.transactionId,
           current.version,
           "rollback_intent",
-          {
-            failure: this.failure(
-              "rollback",
-              errorCode(cause),
-              errorMessage(cause),
-            ),
-          },
+          patch,
         );
+      }
       const checkpoint = await this.ports.checkpoints.load(
         current.checkpointId,
       );
@@ -491,9 +509,26 @@ export class Phase3ApplyCoordinator {
         "manual_attention_required",
       );
     }
+    if (record.state === "rollback_reload_intent") {
+      const manual = await this.manual(
+        record,
+        "recovery",
+        "rollback_reload_incomplete",
+        "Startup recovery found rollback reload intent without durable completion",
+        undefined,
+        observedSha256 ?? undefined,
+      );
+      return recoveryResult(
+        manual,
+        digestCase,
+        observedSha256,
+        "manual_attention_required",
+      );
+    }
     if (
       (record.state === "rollback_committed" ||
-        record.state === "rollback_validation_succeeded") &&
+        record.state === "rollback_validation_succeeded" ||
+        record.state === "rollback_reload_succeeded") &&
       digestCase !== "expected_or_checkpoint"
     ) {
       const manual = await this.manual(
@@ -532,20 +567,28 @@ export class Phase3ApplyCoordinator {
       if (
         current.state !== "rollback_intent" &&
         current.state !== "rollback_committed" &&
-        current.state !== "rollback_validation_succeeded"
-      )
+        current.state !== "rollback_validation_succeeded" &&
+        current.state !== "rollback_reload_succeeded"
+      ) {
+        const patch: {
+          failure: Phase3StructuredFailure;
+          rollbackReloadRequired?: true;
+        } = {
+          failure: this.failure(
+            "recovery",
+            "checkpoint_live",
+            "Checkpoint digest is already live during recovery",
+          ),
+        };
+        if (shouldRequireRollbackReload(current, "startup recovery rollback"))
+          patch.rollbackReloadRequired = true;
         current = await this.ports.journal.transition(
           current.transactionId,
           current.version,
           "rollback_intent",
-          {
-            failure: this.failure(
-              "recovery",
-              "checkpoint_live",
-              "Checkpoint digest is already live during recovery",
-            ),
-          },
+          patch,
         );
+      }
       if (current.state === "rollback_intent")
         current = await this.transition(current, "rollback_committed");
       const checkpoint = await this.ports.checkpoints.load(
@@ -593,7 +636,16 @@ export class Phase3ApplyCoordinator {
           "rollback_validation_succeeded",
         );
       }
-      if (current.state === "rollback_validation_succeeded") {
+      if (
+        current.state === "rollback_validation_succeeded" &&
+        current.rollbackReloadRequired &&
+        current.reloadTarget !== null
+      )
+        current = await this.completeRollbackReload(current, context);
+      if (
+        current.state === "rollback_validation_succeeded" ||
+        current.state === "rollback_reload_succeeded"
+      ) {
         await this.ports.verification.verify(current, "checkpoint", context);
         current = await this.transition(
           current,
@@ -614,6 +666,30 @@ export class Phase3ApplyCoordinator {
     }
   }
 
+  private async completeRollbackReload(
+    record: Phase3TransactionRecord,
+    context: Phase3OperationContext,
+  ): Promise<Phase3TransactionRecord> {
+    if (record.reloadTarget === null) return record;
+    const reloadTarget = record.reloadTarget;
+    let current = await this.transition(record, "rollback_reload_intent");
+    try {
+      await this.ports.reload.reloadDomain(
+        { path: current.path, target: reloadTarget },
+        context,
+      );
+    } catch (error) {
+      return await this.manual(
+        current,
+        "reload",
+        errorCode(error),
+        errorMessage(error),
+      );
+    }
+    current = await this.transition(current, "rollback_reload_succeeded");
+    return current;
+  }
+
   private assertCheckpointIntegrity(
     record: Phase3TransactionRecord,
     checkpoint: Uint8Array,
@@ -631,7 +707,7 @@ export class Phase3ApplyCoordinator {
   ): Phase3TransactionRecord {
     const now = new Date(this.now()).toISOString();
     return assertPhase3TransactionRecord({
-      schemaVersion: 1,
+      schemaVersion: 2,
       transactionId: randomUUID(),
       proposalId: proposal.proposalId,
       proposalStorageSha256: proposal.proposalStorageSha256,
@@ -642,6 +718,8 @@ export class Phase3ApplyCoordinator {
       checkpointId: checkpoint.checkpointId,
       checkpointSha256: checkpoint.checkpointSha256,
       impact: proposal.impact,
+      reloadTarget: proposal.reloadTarget,
+      rollbackReloadRequired: false,
       state: "intent_prepared",
       priorState: null,
       version: 0,
@@ -665,6 +743,7 @@ export class Phase3ApplyCoordinator {
       first.diffSha256 !== second.diffSha256 ||
       first.risk !== second.risk ||
       first.impact !== second.impact ||
+      first.reloadTarget !== second.reloadTarget ||
       first.expiresAt !== second.expiresAt
     )
       throw new Phase3CoordinatorError(
@@ -857,6 +936,40 @@ function dispositionForRecord(
   if (record.state === "rollback_verification_succeeded") return "rolled_back";
   return "manual_attention_required";
 }
+function shouldRequireRollbackReload(
+  record: Phase3TransactionRecord,
+  cause: unknown,
+): boolean {
+  if (record.reloadTarget === null) return false;
+  if (record.rollbackReloadRequired) return true;
+  if (record.state === "reload_succeeded") return true;
+  if (record.state !== "reload_intent") return false;
+  return reloadMayHaveStarted(cause);
+}
+
+function reloadMayHaveStarted(cause: unknown): boolean {
+  if (typeof cause !== "object" || cause === null) return true;
+  const stage = ownStringEvidence(cause, "stage");
+  const dispatch = ownStringEvidence(cause, "dispatch");
+  if (dispatch === "outcome_unknown") return true;
+  if (dispatch === "not_dispatched" || dispatch === "not_attempted")
+    return false;
+  return stage !== "input" && stage !== "resolution";
+}
+
+function ownStringEvidence(value: object, key: string): string | undefined {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor &&
+      Object.hasOwn(descriptor, "value") &&
+      typeof descriptor.value === "string"
+      ? descriptor.value
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function sameTransactionIdentity(
   expected: Phase3TransactionRecord,
   actual: Phase3TransactionRecord,
@@ -872,6 +985,7 @@ function sameTransactionIdentity(
     expected.checkpointId === actual.checkpointId &&
     expected.checkpointSha256 === actual.checkpointSha256 &&
     expected.impact === actual.impact &&
+    expected.reloadTarget === actual.reloadTarget &&
     expected.createdAt === actual.createdAt
   );
 }
@@ -891,25 +1005,44 @@ export class InMemoryPhase3Journal implements Phase3JournalPort {
     record: Phase3TransactionRecord,
   ): Promise<Phase3TransactionRecord> {
     await Promise.resolve();
-    if (record.state !== "intent_prepared" || record.version !== 0)
+    let parsed: Phase3TransactionRecord;
+    try {
+      parsed = assertPhase3TransactionRecord(record);
+    } catch {
+      throw new Phase3CoordinatorError(
+        "journal_illegal_initial_state",
+        "Transaction journal intent record is invalid",
+      );
+    }
+    if (
+      parsed.state !== "intent_prepared" ||
+      parsed.version !== 0 ||
+      parsed.priorState !== null ||
+      parsed.failure !== null ||
+      parsed.rollbackReloadRequired !== false ||
+      parsed.createdAt !== parsed.updatedAt
+    )
       throw new Phase3CoordinatorError(
         "journal_illegal_initial_state",
         "Transaction journal must start at intent_prepared version 0",
       );
-    if (this.records.has(record.transactionId))
+    if (this.records.has(parsed.transactionId))
       throw new Phase3CoordinatorError(
         "journal_conflict",
         "Transaction already exists",
       );
-    this.records.set(record.transactionId, Object.freeze({ ...record }));
-    return this.records.get(record.transactionId)!;
+    this.records.set(parsed.transactionId, Object.freeze({ ...parsed }));
+    return this.records.get(parsed.transactionId)!;
   }
 
   async transition(
     transactionId: string,
     expectedVersion: number,
     state: Phase3TransactionState,
-    patch: Readonly<{ failure?: Phase3StructuredFailure | null }> = {},
+    patch: Readonly<{
+      failure?: Phase3StructuredFailure | null;
+      rollbackReloadRequired?: boolean;
+    }> = {},
   ): Promise<Phase3TransactionRecord> {
     await Promise.resolve();
     const current = this.records.get(transactionId);
@@ -928,16 +1061,40 @@ export class InMemoryPhase3Journal implements Phase3JournalPort {
         "journal_illegal_transition",
         `Illegal Phase 3A transition ${current.state} -> ${state}`,
       );
-    const next = assertPhase3TransactionRecord({
-      ...current,
-      state,
-      priorState: current.state,
-      version: current.version + 1,
-      updatedAt: new Date().toISOString(),
-      failure: Object.hasOwn(patch, "failure")
-        ? patch.failure
-        : current.failure,
-    });
+    if (
+      Object.hasOwn(patch, "rollbackReloadRequired") &&
+      (patch.rollbackReloadRequired !== true || state !== "rollback_intent")
+    )
+      throw new Phase3CoordinatorError(
+        "journal_illegal_transition",
+        "Rollback reload flag can only become true on rollback intent",
+      );
+    let next: Phase3TransactionRecord;
+    try {
+      next = assertPhase3TransactionRecord({
+        ...current,
+        state,
+        priorState: current.state,
+        version: current.version + 1,
+        updatedAt: new Date().toISOString(),
+        failure: Object.hasOwn(patch, "failure")
+          ? patch.failure
+          : current.failure,
+        rollbackReloadRequired:
+          current.rollbackReloadRequired ||
+          patch.rollbackReloadRequired === true,
+      });
+    } catch {
+      throw new Phase3CoordinatorError(
+        "journal_illegal_transition",
+        "Transaction reload context is illegal",
+      );
+    }
+    if (!phase3CanRecordTransition(current, next))
+      throw new Phase3CoordinatorError(
+        "journal_illegal_transition",
+        "Transaction reload context is illegal",
+      );
     this.records.set(transactionId, Object.freeze(next));
     return next;
   }

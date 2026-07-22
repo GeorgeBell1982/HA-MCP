@@ -18,6 +18,7 @@ import {
 import {
   assertPhase3TransactionRecord,
   canonicalJson,
+  phase3CanRecordTransition,
   phase3CanTransition,
   phase3TransactionRecordSchema,
   sha256,
@@ -133,7 +134,7 @@ const pendingNamePattern =
 
 const envelopeSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     record: phase3TransactionRecordSchema,
     recordSha256: sha256Schema,
   })
@@ -205,6 +206,7 @@ export class DurablePhase3Journal implements Phase3JournalPort {
       parsed.version !== 0 ||
       parsed.priorState !== null ||
       parsed.failure !== null ||
+      parsed.rollbackReloadRequired !== false ||
       parsed.createdAt !== parsed.updatedAt
     )
       throw illegal("Phase 3 journal intent must start at version 0");
@@ -225,7 +227,10 @@ export class DurablePhase3Journal implements Phase3JournalPort {
     transactionId: string,
     expectedVersion: number,
     state: Phase3TransactionState,
-    patch: Readonly<{ failure?: Phase3StructuredFailure | null }> = {},
+    patch: Readonly<{
+      failure?: Phase3StructuredFailure | null;
+      rollbackReloadRequired?: boolean;
+    }> = {},
   ): Promise<Phase3TransactionRecord> {
     this.assertHealthy();
     await this.refresh();
@@ -247,6 +252,11 @@ export class DurablePhase3Journal implements Phase3JournalPort {
       );
     if (!phase3CanTransition(current.state, state))
       throw illegal("Phase 3 journal transition is illegal");
+    if (
+      Object.hasOwn(patch, "rollbackReloadRequired") &&
+      (patch.rollbackReloadRequired !== true || state !== "rollback_intent")
+    )
+      throw illegal("Phase 3 rollback reload flag transition is illegal");
     await this.assertCapacity(false);
     const nextResult = phase3TransactionRecordSchema.safeParse({
       ...current,
@@ -257,10 +267,14 @@ export class DurablePhase3Journal implements Phase3JournalPort {
       failure: Object.hasOwn(patch, "failure")
         ? (patch.failure ?? null)
         : current.failure,
+      rollbackReloadRequired:
+        current.rollbackReloadRequired || patch.rollbackReloadRequired === true,
     });
     if (!nextResult.success)
       throw illegal("Phase 3 journal transition record is invalid");
     const next = nextResult.data;
+    if (!phase3CanRecordTransition(current, next))
+      throw illegal("Phase 3 journal transition context is illegal");
     await this.append(next, "journal_cas_conflict");
     this.cache(next);
     return freezeRecord(next);
@@ -522,6 +536,7 @@ export class DurablePhase3Journal implements Phase3JournalPort {
       record.version !== 0 ||
       record.priorState !== null ||
       record.failure !== null ||
+      record.rollbackReloadRequired !== false ||
       record.createdAt !== record.updatedAt
     )
       throw unhealthy("Phase 3 journal initial record is illegal");
@@ -542,13 +557,25 @@ export class DurablePhase3Journal implements Phase3JournalPort {
       previous.checkpointId !== record.checkpointId ||
       previous.checkpointSha256 !== record.checkpointSha256 ||
       previous.impact !== record.impact ||
+      previous.reloadTarget !== record.reloadTarget ||
       previous.createdAt !== record.createdAt
     )
       throw unhealthy("Phase 3 journal immutable identity changed");
     if (
+      record.rollbackReloadRequired !== previous.rollbackReloadRequired &&
+      !(
+        previous.rollbackReloadRequired === false &&
+        record.rollbackReloadRequired === true &&
+        record.state === "rollback_intent"
+      )
+    )
+      throw unhealthy(
+        "Phase 3 journal rollback reload flag regressed or changed illegally",
+      );
+    if (
       record.version !== previous.version + 1 ||
       record.priorState !== previous.state ||
-      !phase3CanTransition(previous.state, record.state)
+      !phase3CanRecordTransition(previous, record)
     )
       throw unhealthy("Phase 3 journal history adjacency is illegal");
   }
@@ -797,7 +824,7 @@ function journalEnvelope(
   record: Phase3TransactionRecord,
 ): Phase3JournalEnvelope {
   const core = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     record,
   };
   return Object.freeze({
@@ -814,6 +841,12 @@ function parseEnvelope(bytes: Uint8Array): Phase3TransactionRecord {
   } catch {
     throw unhealthy("Phase 3 journal record is malformed");
   }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { readonly schemaVersion?: unknown }).schemaVersion === 1
+  )
+    throw unhealthy("Phase 3 v1 journal entries are rejected without mutation");
   const parsed = envelopeSchema.safeParse(value);
   if (!parsed.success || canonicalJson(parsed.data) !== text)
     throw unhealthy("Phase 3 journal record is non-canonical");
