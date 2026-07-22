@@ -8,6 +8,11 @@ import {
   ProtectedPhase3SourceAdapter,
   type Phase3SourceBoundary,
 } from "../src/phase3/sourceAdapter.js";
+import type {
+  Phase3OperationContext,
+  Phase3SourcePort,
+} from "../src/phase3/applyCoordinator.js";
+import type { Phase3PostEffectSourceDigestPort } from "../src/phase3/verificationAdapter.js";
 import type { RepositoryCatalogProvider } from "../src/repository/repositoryReads.js";
 import {
   RepositoryBoundaryError,
@@ -347,6 +352,449 @@ describe("Phase 3E protected source adapter", () => {
   });
 });
 
+describe("Phase 3K contextual protected source digest bridge", () => {
+  it("executes both interface forms with one frozen exact fresh context per contextual call", async () => {
+    const bytes = Uint8Array.from([0xff, 0x00, 0x61]);
+    const legacyFixture = fixture({ bytes });
+    const sourcePort: Phase3SourcePort = legacyFixture.adapter;
+    await expect(sourcePort.readDigest(defaultPath)).resolves.toBe(
+      digest(bytes),
+    );
+
+    const { adapter, boundary, catalog } = fixture({ bytes });
+    const postEffectPort: Phase3PostEffectSourceDigestPort = adapter;
+    const controller = new AbortController();
+    const deadlineAt = Date.now() + 123_456;
+    let signalReads = 0;
+    let deadlineReads = 0;
+    const supplied = {
+      get signal(): AbortSignal {
+        signalReads += 1;
+        return controller.signal;
+      },
+      get deadlineAt(): number {
+        deadlineReads += 1;
+        return deadlineAt;
+      },
+    } as Phase3OperationContext;
+    const firstDigest = await postEffectPort.readDigest(defaultPath, supplied);
+    expect(firstDigest).toBe(digest(bytes));
+    expect(firstDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(typeof firstDigest).toBe("string");
+    expect(signalReads).toBe(1);
+    expect(deadlineReads).toBe(1);
+
+    const contexts = [
+      boundary.contexts[0],
+      catalog.calls[0],
+      boundary.readContexts[0],
+      boundary.contexts[1],
+    ];
+    expect(new Set(contexts).size).toBe(1);
+    const first = contexts[0]!;
+    expect(first).not.toBe(supplied);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(first.signal).toBe(controller.signal);
+    expect(first.deadlineAt).toBe(deadlineAt);
+    expect(first.requestId).toMatch(uuidPattern);
+    expect(first.operationId).toMatch(uuidPattern);
+    expect(first.requestId).not.toBe(first.operationId);
+
+    await expect(
+      postEffectPort.readDigest(defaultPath, phase3Context()),
+    ).resolves.toBe(digest(bytes));
+    const second = boundary.contexts[2]!;
+    expect(Object.isFrozen(second)).toBe(true);
+    expect(second.requestId).toMatch(uuidPattern);
+    expect(second.operationId).toMatch(uuidPattern);
+    expect(
+      new Set([
+        first.requestId,
+        first.operationId,
+        second.requestId,
+        second.operationId,
+      ]).size,
+    ).toBe(4);
+    expect(boundary.reads).toBe(2);
+    expect(boundary.readBuffers.every(isZeroed)).toBe(true);
+  });
+
+  it("validates paths before hostile context access and classifies absence and protection before reads", async () => {
+    let gets = 0;
+    const hostile = {
+      get signal(): AbortSignal {
+        gets += 1;
+        throw new Error(rawSecret);
+      },
+      get deadlineAt(): number {
+        gets += 1;
+        throw new Error(rawSecret);
+      },
+    };
+    const invalid = fixture();
+    await expectSanitizedFailure(
+      contextualDigest(invalid.adapter, hostile, "../secrets.yaml"),
+      "invalid_input",
+      [rawSecret, "../secrets.yaml"],
+    );
+    expect(gets).toBe(0);
+    expect(invalid.boundary.events).toEqual([]);
+    expect(invalid.catalog.calls).toEqual([]);
+
+    const absent = fixture({ catalogAbsent: true });
+    await expect(
+      absent.adapter.readDigest(defaultPath, phase3Context()),
+    ).resolves.toBeNull();
+    expect(absent.boundary.events).toEqual(["fresh", "catalog"]);
+    expect(absent.boundary.reads).toBe(0);
+
+    for (const options of [
+      { protectedPaths: [defaultPath] },
+      {
+        entryIdentity: protectedIdentity,
+        readIdentity: protectedIdentity,
+        protectedIdentities: [protectedIdentity],
+      },
+    ]) {
+      const denied = fixture(options);
+      await expect(
+        denied.adapter.readDigest(defaultPath, phase3Context()),
+      ).rejects.toMatchObject({ code: "protected_resource" });
+      expect(denied.boundary.reads).toBe(0);
+    }
+  });
+
+  it.each([
+    ["empty", 0, true],
+    ["limit", PHASE2_MAX_TEXT_BYTES, true],
+    ["limit plus one", PHASE2_MAX_TEXT_BYTES + 1, false],
+  ] as const)(
+    "handles contextual digest %s bytes with exact bounds and zeroization",
+    async (_case, size, allowed) => {
+      const bytes = new Uint8Array(size);
+      bytes.fill(0x61);
+      const { adapter, boundary } = fixture({ bytes });
+      const operation = adapter.readDigest(defaultPath, phase3Context());
+      if (allowed) await expect(operation).resolves.toBe(digest(bytes));
+      else
+        await expect(operation).rejects.toMatchObject({
+          code: "service_unhealthy",
+        });
+      expect(boundary.readBuffers).toHaveLength(1);
+      expect(boundary.readBuffers.every(isZeroed)).toBe(true);
+    },
+  );
+
+  it.each(["resource_not_found", "protected_resource"] as const)(
+    "maps contextual accepted-read %s races to unhealthy without retry",
+    async (code) => {
+      const { adapter, boundary } = fixture({
+        readError: new RepositoryBoundaryError(
+          code,
+          defaultPath + " " + rawSecret,
+        ),
+      });
+      await expectSanitizedFailure(
+        adapter.readDigest(defaultPath, phase3Context()),
+        "service_unhealthy",
+        [defaultPath, rawSecret],
+      );
+      expect(boundary.reads).toBe(1);
+      expect(boundary.readBuffers).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["root", { readRootIdentity: identity("other-root") }],
+    ["file", { readIdentity: identity("other-file") }],
+    ["size", { catalogSize: 4 }],
+  ] as const)(
+    "fails contextual digest closed on %s drift and zeros bytes",
+    async (_case, options) => {
+      const { adapter, boundary } = fixture({
+        bytes: Buffer.from("abc"),
+        ...options,
+      });
+      await expect(
+        adapter.readDigest(defaultPath, phase3Context()),
+      ).rejects.toMatchObject({ code: "service_unhealthy" });
+      expect(boundary.readBuffers).toHaveLength(1);
+      expect(boundary.readBuffers.every(isZeroed)).toBe(true);
+    },
+  );
+
+  it("sanitizes first, final, known, and unknown contextual failures", async () => {
+    const cases = [
+      {
+        options: {
+          freshErrors: [
+            new RepositoryBoundaryError(
+              "capability_unavailable",
+              defaultPath + " " + rawSecret,
+            ),
+          ],
+        },
+        code: "capability_unavailable" as const,
+      },
+      {
+        options: {
+          readError: new RepositoryBoundaryError(
+            "path_denied",
+            defaultPath + " " + rawSecret,
+          ),
+        },
+        code: "path_denied" as const,
+      },
+      {
+        options: {
+          catalogError: new Error(defaultPath + " " + rawSecret),
+        },
+        code: "service_unhealthy" as const,
+      },
+    ];
+    for (const item of cases) {
+      const current = fixture(item.options);
+      await expectSanitizedFailure(
+        current.adapter.readDigest(defaultPath, phase3Context()),
+        item.code,
+        [defaultPath, rawSecret],
+      );
+    }
+
+    const final = fixture({
+      freshErrors: [
+        undefined,
+        new RepositoryBoundaryError(
+          "path_denied",
+          defaultPath + " " + rawSecret,
+        ),
+      ],
+    });
+    await expectSanitizedFailure(
+      final.adapter.readDigest(defaultPath, phase3Context()),
+      "path_denied",
+      [defaultPath, rawSecret],
+    );
+    expect(final.boundary.readBuffers).toHaveLength(1);
+    expect(final.boundary.readBuffers.every(isZeroed)).toBe(true);
+  });
+
+  it("honors cancellation and deadlines before and during contextual reads", async () => {
+    const cancelled = new AbortController();
+    cancelled.abort();
+    const preCancelled = fixture({ checkActive: true });
+    await expect(
+      preCancelled.adapter.readDigest(defaultPath, {
+        signal: cancelled.signal,
+        deadlineAt: Date.now() + 60_000,
+      }),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(preCancelled.boundary.reads).toBe(0);
+
+    const duringController = new AbortController();
+    const duringCancelled = fixture({
+      checkActive: true,
+      afterRead: () => duringController.abort(),
+    });
+    await expect(
+      duringCancelled.adapter.readDigest(defaultPath, {
+        signal: duringController.signal,
+        deadlineAt: Date.now() + 60_000,
+      }),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(duringCancelled.boundary.readBuffers.every(isZeroed)).toBe(true);
+
+    vi.useFakeTimers();
+    try {
+      const now = new Date("2026-07-22T12:00:00.000Z");
+      vi.setSystemTime(now);
+      const preDeadline = fixture({ checkActive: true });
+      await expect(
+        preDeadline.adapter.readDigest(defaultPath, {
+          signal: new AbortController().signal,
+          deadlineAt: now.getTime() - 1,
+        }),
+      ).rejects.toMatchObject({ code: "deadline_exceeded" });
+      expect(preDeadline.boundary.reads).toBe(0);
+
+      const duringDeadline = fixture({
+        checkActive: true,
+        afterRead: () => vi.setSystemTime(now.getTime() + 60_001),
+      });
+      await expect(
+        duringDeadline.adapter.readDigest(defaultPath, {
+          signal: new AbortController().signal,
+          deadlineAt: now.getTime() + 60_000,
+        }),
+      ).rejects.toMatchObject({ code: "deadline_exceeded" });
+      expect(duringDeadline.boundary.readBuffers.every(isZeroed)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["null", null],
+    ["number", 0],
+    ["string", "context"],
+    ["boolean", false],
+    ["array", []],
+    ["plain signal", { signal: { aborted: false }, deadlineAt: 1 }],
+    [
+      "NaN deadline",
+      { signal: new AbortController().signal, deadlineAt: Number.NaN },
+    ],
+    [
+      "infinite deadline",
+      {
+        signal: new AbortController().signal,
+        deadlineAt: Number.POSITIVE_INFINITY,
+      },
+    ],
+    [
+      "string deadline",
+      { signal: new AbortController().signal, deadlineAt: "1" },
+    ],
+  ])(
+    "rejects runtime-hostile %s context without fallback or effects",
+    async (_case, value) => {
+      const { adapter, boundary, catalog } = fixture();
+      await expectSanitizedFailure(
+        contextualDigest(adapter, value),
+        "service_unhealthy",
+        [defaultPath, rawSecret],
+      );
+      expect(boundary.events).toEqual([]);
+      expect(catalog.calls).toEqual([]);
+      expect(boundary.reads).toBe(0);
+    },
+  );
+
+  it("rejects a shadowed brand-compatible forgery and descriptor-trapping proxy before effects", async () => {
+    const realSignal = new AbortController().signal;
+    const forgedSignal = Object.create(
+      AbortSignal.prototype,
+      Object.getOwnPropertyDescriptors(realSignal),
+    ) as AbortSignal;
+    expect(Reflect.get(AbortSignal.prototype, "aborted", forgedSignal)).toBe(
+      false,
+    );
+
+    const shadowCanary = "SHADOW-ABORTED-GETTER-CANARY";
+    let shadowReads = 0;
+    Object.defineProperty(forgedSignal, "aborted", {
+      configurable: true,
+      enumerable: true,
+      get(): boolean {
+        shadowReads += 1;
+        throw new Error(shadowCanary);
+      },
+    });
+    const shadowFixture = fixture();
+    await expectSanitizedFailure(
+      contextualDigest(shadowFixture.adapter, {
+        signal: forgedSignal,
+        deadlineAt: Date.now() + 60_000,
+      }),
+      "service_unhealthy",
+      [defaultPath, rawSecret, shadowCanary],
+    );
+    expect(shadowReads).toBe(0);
+    expect(shadowFixture.boundary.events).toEqual([]);
+    expect(shadowFixture.catalog.calls).toEqual([]);
+    expect(shadowFixture.boundary.reads).toBe(0);
+
+    const descriptorCanary = "SIGNAL-DESCRIPTOR-TRAP-CANARY";
+    const descriptorProperties: PropertyKey[] = [];
+    const descriptorProxy = new Proxy(realSignal, {
+      getOwnPropertyDescriptor(_target, property): never {
+        descriptorProperties.push(property);
+        throw new Error(descriptorCanary);
+      },
+    });
+    const proxyFixture = fixture();
+    await expectSanitizedFailure(
+      contextualDigest(proxyFixture.adapter, {
+        signal: descriptorProxy,
+        deadlineAt: Date.now() + 60_000,
+      }),
+      "service_unhealthy",
+      [defaultPath, rawSecret, descriptorCanary],
+    );
+    expect(descriptorProperties).toEqual(["aborted"]);
+    expect(proxyFixture.boundary.events).toEqual([]);
+    expect(proxyFixture.catalog.calls).toEqual([]);
+    expect(proxyFixture.boundary.reads).toBe(0);
+  });
+
+  it("sanitizes throwing getters and proxy traps with at-most-once reads", async () => {
+    let signalReads = 0;
+    let deadlineReads = 0;
+    const signalCanary = "SIGNAL-GETTER-CANARY";
+    const signalFixture = fixture();
+    await expectSanitizedFailure(
+      contextualDigest(signalFixture.adapter, {
+        get signal(): AbortSignal {
+          signalReads += 1;
+          throw new Error(signalCanary);
+        },
+        get deadlineAt(): number {
+          deadlineReads += 1;
+          return Date.now() + 60_000;
+        },
+      }),
+      "service_unhealthy",
+      [defaultPath, signalCanary],
+    );
+    expect(signalReads).toBe(1);
+    expect(deadlineReads).toBe(0);
+    expect(signalFixture.boundary.events).toEqual([]);
+
+    signalReads = 0;
+    deadlineReads = 0;
+    const deadlineCanary = "DEADLINE-GETTER-CANARY";
+    const deadlineFixture = fixture();
+    await expectSanitizedFailure(
+      contextualDigest(deadlineFixture.adapter, {
+        get signal(): AbortSignal {
+          signalReads += 1;
+          return new AbortController().signal;
+        },
+        get deadlineAt(): number {
+          deadlineReads += 1;
+          throw new Error(deadlineCanary);
+        },
+      }),
+      "service_unhealthy",
+      [defaultPath, deadlineCanary],
+    );
+    expect(signalReads).toBe(1);
+    expect(deadlineReads).toBe(1);
+    expect(deadlineFixture.boundary.events).toEqual([]);
+
+    const proxyCanary = "PROXY-GET-CANARY";
+    const properties: PropertyKey[] = [];
+    const proxyFixture = fixture();
+    const hostile = new Proxy(
+      {},
+      {
+        get(_target, property): never {
+          properties.push(property);
+          throw new Error(proxyCanary);
+        },
+      },
+    );
+    await expectSanitizedFailure(
+      contextualDigest(proxyFixture.adapter, hostile),
+      "service_unhealthy",
+      [defaultPath, proxyCanary],
+    );
+    expect(properties).toEqual(["signal"]);
+    expect(proxyFixture.boundary.events).toEqual([]);
+    expect(proxyFixture.catalog.calls).toEqual([]);
+  });
+});
+
 function fixture(
   options: Readonly<{
     bytes?: Uint8Array;
@@ -527,6 +975,40 @@ function phase3Context(): {
     signal: new AbortController().signal,
     deadlineAt: Date.now() + 60_000,
   };
+}
+
+function contextualDigest(
+  adapter: ProtectedPhase3SourceAdapter,
+  context: unknown,
+  path = defaultPath,
+): Promise<string | null> {
+  return (
+    adapter.readDigest as (
+      path: string,
+      context: unknown,
+    ) => Promise<string | null>
+  )(path, context);
+}
+
+async function expectSanitizedFailure(
+  promise: Promise<unknown>,
+  code: RepositoryBoundaryError["code"],
+  forbidden: readonly string[],
+): Promise<void> {
+  try {
+    await promise;
+    throw new Error("Expected operation to fail");
+  } catch (error) {
+    expect(error).toBeInstanceOf(RepositoryBoundaryError);
+    expect((error as RepositoryBoundaryError).code).toBe(code);
+    const message = error instanceof Error ? error.message : String(error);
+    const serialized = JSON.stringify(error);
+    for (const value of forbidden) {
+      expect(message).not.toContain(value);
+      expect(serialized).not.toContain(value);
+    }
+    expect(Object.prototype.hasOwnProperty.call(error, "cause")).toBe(false);
+  }
 }
 
 function invoke(

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { ModuleKind, ScriptTarget, transpileModule } from "typescript";
 import { ReadTools } from "../src/application.js";
 import { phase2ToolNames } from "../src/phase2Contracts.js";
 import { phase3Contract } from "../src/phase3/contracts.js";
@@ -21,7 +22,7 @@ const phase3Files = [
 
 const phase3NativeFiles = ["openat2-replace.c"] as const;
 
-describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J isolation", () => {
+describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J/3K isolation", () => {
   it("does not register tools or enable writes", () => {
     const phase1Names = ReadTools.prototype.names.call({});
     expect(phase1Names.some((name) => name.includes("phase3"))).toBe(false);
@@ -31,7 +32,7 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J isolation", () => {
     expect(phase3Contract.liveAdapters).toBe("absent");
   });
 
-  it("keeps the Phase 3B/3C/3D/3E/3F/3G/3H/3I/3J adapters out of runtime composition", () => {
+  it("keeps the Phase 3B/3C/3D/3E/3F/3G/3H/3I/3J/3K adapters out of runtime composition", () => {
     for (const path of [
       "src/index.ts",
       "src/phase2Activation.ts",
@@ -67,7 +68,7 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J isolation", () => {
     }
   });
 
-  it("keeps root and add-on Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J source mirrors exact", () => {
+  it("keeps root and add-on Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J/3K source mirrors exact", () => {
     for (const file of phase3Files) {
       const root = readFileSync(`src/phase3/${file}`, "utf8");
       const addon = readFileSync(`addon/app/src/phase3/${file}`, "utf8");
@@ -78,6 +79,42 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J isolation", () => {
       const addon = readFileSync(`addon/app/src/phase3/native/${file}`, "utf8");
       expect(addon).toBe(root);
     }
+  });
+
+  it("keeps the Phase 3K source bridge on an inert type-only import boundary", () => {
+    const source = readFileSync("src/phase3/sourceAdapter.ts", "utf8");
+    const imports = [...source.matchAll(/from\s+"([^"]+)"/gu)]
+      .map((match) => match[1])
+      .sort();
+    expect(imports).toEqual([
+      "../phase2Contracts.js",
+      "../repository/repositoryReads.js",
+      "../security/repositoryBoundary.js",
+      "./applyCoordinator.js",
+      "./resourceLocks.js",
+      "./verificationAdapter.js",
+      "node:crypto",
+    ]);
+    expect(source).toContain(
+      'import type { Phase3PostEffectSourceDigestPort } from "./verificationAdapter.js";',
+    );
+    const emitted = transpileModule(source, {
+      compilerOptions: {
+        module: ModuleKind.ES2022,
+        target: ScriptTarget.ES2022,
+      },
+    }).outputText;
+    expect(emitted).not.toContain("verificationAdapter");
+    for (const forbidden of [
+      "../ha/",
+      "reloadAdapter",
+      "Phase3TrustedVerificationProbePort",
+      "system_log",
+      "logbook",
+      "fetch(",
+      "axios",
+    ])
+      expect(source.toLowerCase()).not.toContain(forbidden.toLowerCase());
   });
 
   it("keeps the Phase 3J adapter on an exact narrow import allowlist", () => {

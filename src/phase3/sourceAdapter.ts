@@ -18,6 +18,7 @@ import type {
   Phase3SourcePort,
 } from "./applyCoordinator.js";
 import { canonicalPhase3Path } from "./resourceLocks.js";
+import type { Phase3PostEffectSourceDigestPort } from "./verificationAdapter.js";
 
 export interface Phase3SourceBoundary {
   assertFresh(context: Phase2OperationContext): Promise<void>;
@@ -28,7 +29,9 @@ export interface Phase3SourceBoundary {
   ): Promise<SecureFileRead>;
 }
 
-export class ProtectedPhase3SourceAdapter implements Phase3SourcePort {
+export class ProtectedPhase3SourceAdapter
+  implements Phase3SourcePort, Phase3PostEffectSourceDigestPort
+{
   constructor(
     private readonly catalogs: RepositoryCatalogProvider,
     private readonly boundary: Phase3SourceBoundary,
@@ -50,14 +53,19 @@ export class ProtectedPhase3SourceAdapter implements Phase3SourcePort {
     });
   }
 
-  async readDigest(path: string): Promise<string | null> {
+  async readDigest(path: string): Promise<string | null>;
+  async readDigest(
+    path: string,
+    context: Phase3OperationContext,
+  ): Promise<string | null>;
+  async readDigest(path: string, context?: unknown): Promise<string | null> {
     const canonical = canonicalSourcePath(path);
     return await this.withSanitizedErrors(async () => {
-      const source = await this.readSource(
-        canonical,
-        internalPhase2Context(),
-        false,
-      );
+      const derivedContext =
+        context === undefined
+          ? internalPhase2Context()
+          : phase2Context(context);
+      const source = await this.readSource(canonical, derivedContext, false);
       return source?.sha256 ?? null;
     });
   }
@@ -135,15 +143,40 @@ function canonicalSourcePath(path: string): string {
   }
 }
 
-function phase2Context(
-  context: Phase3OperationContext,
-): Phase2OperationContext {
+function phase2Context(context: unknown): Phase2OperationContext {
+  if (typeof context !== "object" || context === null) throw unhealthy();
+  const candidate = context as Readonly<{
+    signal?: unknown;
+    deadlineAt?: unknown;
+  }>;
+  const signal = candidate.signal;
+  const deadlineAt = candidate.deadlineAt;
+  if (
+    !isIntrinsicBrandCompatibleUnshadowedAbortSignal(signal) ||
+    typeof deadlineAt !== "number" ||
+    !Number.isFinite(deadlineAt)
+  )
+    throw unhealthy();
   return Object.freeze({
     requestId: randomUUID(),
     operationId: randomUUID(),
-    deadlineAt: context.deadlineAt,
-    signal: context.signal,
+    deadlineAt,
+    signal,
   });
+}
+
+function isIntrinsicBrandCompatibleUnshadowedAbortSignal(
+  value: unknown,
+): value is AbortSignal {
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    if (Reflect.getOwnPropertyDescriptor(value, "aborted") !== undefined)
+      return false;
+    Reflect.get(AbortSignal.prototype, "aborted", value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function internalPhase2Context(): Phase2OperationContext {
