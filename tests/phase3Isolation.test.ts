@@ -23,7 +23,7 @@ const phase3Files = [
 
 const phase3NativeFiles = ["openat2-replace.c"] as const;
 
-describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J/3K/3L isolation", () => {
+describe("Phase 3A through Phase 3N isolation", () => {
   it("does not register tools or enable writes", () => {
     const phase1Names = ReadTools.prototype.names.call({});
     expect(phase1Names.some((name) => name.includes("phase3"))).toBe(false);
@@ -33,7 +33,7 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J/3K/3L isolation", () => {
     expect(phase3Contract.liveAdapters).toBe("absent");
   });
 
-  it("keeps the Phase 3B/3C/3D/3E/3F/3G/3H/3I/3J/3K/3L adapters out of runtime composition", () => {
+  it("keeps the Phase 3B through Phase 3N adapters out of runtime composition", () => {
     for (const path of [
       "src/index.ts",
       "src/phase2Activation.ts",
@@ -70,7 +70,7 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J/3K/3L isolation", () => {
     }
   });
 
-  it("keeps the Phase 3L approval source on an inert narrow import boundary", () => {
+  it("keeps the Phase 3N approval source on an inert narrow import boundary", () => {
     const source = readFileSync("src/phase3/durableApproval.ts", "utf8");
     const imports = [...source.matchAll(/from\s+"([^"]+)"/gu)]
       .map((match) => match[1])
@@ -83,6 +83,7 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J/3K/3L isolation", () => {
       "node:fs",
       "node:fs/promises",
       "node:path",
+      "node:util",
       "zod",
     ]);
     for (const forbidden of [
@@ -96,7 +97,7 @@ describe("Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J/3K/3L isolation", () => {
       expect(source).not.toContain(forbidden);
   });
 
-  it("keeps root and add-on Phase 3A/3B/3C/3D/3E/3F/3G/3H/3I/3J/3K/3L source mirrors exact", () => {
+  it("keeps root and add-on Phase 3A through Phase 3N source mirrors exact", () => {
     for (const file of phase3Files) {
       const root = readFileSync(`src/phase3/${file}`, "utf8");
       const addon = readFileSync(`addon/app/src/phase3/${file}`, "utf8");

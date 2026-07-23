@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { constants, readdirSync } from "node:fs";
+import { constants, readdirSync, type BigIntStats } from "node:fs";
 import {
   chmod,
   link,
@@ -11,6 +11,7 @@ import {
   readdir,
   rename,
   rm,
+  rmdir,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -30,6 +31,7 @@ import {
   Phase3ApprovalSimulatedCrash,
   type DurablePhase3ApprovalOptions,
   type Phase3ApprovalFileHandle,
+  type Phase3ApprovalCustodyLease,
   type Phase3ApprovalFilesystem,
   type Phase3ApprovalHookStage,
   type Phase3ApprovalOpenLease,
@@ -72,6 +74,7 @@ const nativeFilesystem: Phase3ApprovalFilesystem = Object.freeze({
   link,
   rename,
   rm,
+  rmdir,
 });
 
 afterEach(async () => {
@@ -2172,6 +2175,1352 @@ describe("Phase 3L durable approval grants", () => {
     },
   );
 });
+
+describe("Phase 3N stale approval-stage remediation", () => {
+  it("requires acquisition before effects and rejects malformed leases without releasing them", async () => {
+    const absentRoot = await approvalRoot();
+    const absentStage = join(absentRoot, ".header-stage-0");
+    await writeFile(absentStage, "", { mode: 0o600 });
+    const absent = configured(absentRoot, { randomUUID: uuidSource([]) });
+    await expectSanitizedFailure(
+      absent.remediateStaleStages(),
+      "approval_store_unhealthy",
+      absentRoot,
+    );
+    await expect(readFile(absentStage, "utf8")).resolves.toBe("");
+    await expect(absent.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+
+    const rejectedRoot = await approvalRoot();
+    const rejectedStage = join(rejectedRoot, ".header-stage-0");
+    await writeFile(rejectedStage, "", { mode: 0o600 });
+    const rejected = configured(rejectedRoot, {
+      acquireExclusiveRootCustody: async () => {
+        throw new Error(`acquisition canary ${rejectedRoot}`);
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expectSanitizedFailure(
+      rejected.remediateStaleStages(),
+      "approval_store_unhealthy",
+      rejectedRoot,
+    );
+    await expect(readFile(rejectedStage, "utf8")).resolves.toBe("");
+
+    let malformedReleaseCalls = 0;
+    const release = async () => {
+      malformedReleaseCalls += 1;
+    };
+    const accessorLease = Object.freeze(
+      Object.defineProperty({}, "release", {
+        configurable: false,
+        enumerable: true,
+        get: () => release,
+      }),
+    );
+    const proxiedRelease = new Proxy(release, {});
+    const malformed: readonly unknown[] = [
+      { release },
+      Object.freeze({ release, extra: true }),
+      Object.freeze({ release, [Symbol("extra")]: true }),
+      accessorLease,
+      Object.freeze(new Proxy({ release }, {})),
+      Object.freeze({ release: proxiedRelease }),
+    ];
+    for (const candidate of malformed) {
+      const root = await approvalRoot();
+      const stage = join(root, ".header-stage-0");
+      await writeFile(stage, "", { mode: 0o600 });
+      const store = configured(root, {
+        acquireExclusiveRootCustody: async () =>
+          candidate as Phase3ApprovalCustodyLease,
+        randomUUID: uuidSource([]),
+      });
+      await expectSanitizedFailure(
+        store.remediateStaleStages(),
+        "approval_store_unhealthy",
+        root,
+      );
+      await expect(readFile(stage, "utf8")).resolves.toBe("");
+    }
+    expect(malformedReleaseCalls).toBe(0);
+  });
+
+  it("releases an exact lease once with its receiver and latches release failures", async () => {
+    const root = await approvalRoot();
+    await seedApprovalStore(root, false);
+    await writeFile(join(root, ".header-stage-0"), "", { mode: 0o600 });
+    let calls = 0;
+    const receivers: unknown[] = [];
+    const release = async function (this: unknown): Promise<void> {
+      calls += 1;
+      receivers.push(this);
+    };
+    const lease = Object.freeze({ release });
+    const store = configured(root, {
+      acquireExclusiveRootCustody: async (acquiredRoot) => {
+        expect(acquiredRoot).toBe(root);
+        return lease;
+      },
+      randomUUID: uuidSource([]),
+    });
+    const counts = await store.remediateStaleStages();
+    expect(counts).toEqual({
+      headerStages: 1,
+      grantStages: 0,
+      receiptStages: 0,
+    });
+    expect(Reflect.ownKeys(counts)).toEqual([
+      "headerStages",
+      "grantStages",
+      "receiptStages",
+    ]);
+    expect(Object.isFrozen(counts)).toBe(true);
+    expect(calls).toBe(1);
+    expect(receivers).toEqual([lease]);
+
+    for (const invalidRelease of [
+      async () => {
+        throw new Error("release canary");
+      },
+      (async () => "not undefined") as unknown as () => Promise<void>,
+    ]) {
+      const failedRoot = await approvalRoot();
+      const failedStage = join(failedRoot, ".header-stage-0");
+      await writeFile(failedStage, "", { mode: 0o600 });
+      let failedCalls = 0;
+      const failedStore = configured(failedRoot, {
+        acquireExclusiveRootCustody: async () =>
+          Object.freeze({
+            release: async () => {
+              failedCalls += 1;
+              return await invalidRelease();
+            },
+          }),
+        randomUUID: uuidSource([]),
+      });
+      await expectSanitizedFailure(
+        failedStore.remediateStaleStages(),
+        "approval_store_unhealthy",
+        failedRoot,
+      );
+      expect(failedCalls).toBe(1);
+      await expect(readFile(failedStage)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(failedStore.remediateStaleStages()).rejects.toMatchObject({
+        code: "approval_store_unhealthy",
+      });
+    }
+  });
+
+  it("reserves synchronously through acquisition, cleanup, release, and close", async () => {
+    const root = await approvalRoot();
+    await seedApprovalStore(root, false);
+    const stage = join(root, ".header-stage-0");
+    await writeFile(stage, "", { mode: 0o600 });
+    const acquired = deferred<Phase3ApprovalCustodyLease>();
+    const releaseGate = deferred<void>();
+    const releaseStarted = deferred<void>();
+    let releaseCalls = 0;
+    let providerCalls = 0;
+    const lease = Object.freeze({
+      release: async () => {
+        releaseCalls += 1;
+        releaseStarted.resolve(undefined);
+        await releaseGate.promise;
+      },
+    });
+    const store = configured(root, {
+      acquireExclusiveRootCustody: async () => {
+        providerCalls += 1;
+        return await acquired.promise;
+      },
+      randomUUID: uuidSource([]),
+    });
+
+    let remediationSettled = false;
+    const remediation = store.remediateStaleStages().finally(() => {
+      remediationSettled = true;
+    });
+    expect(providerCalls).toBe(0);
+    const overlappingRemediation = store.remediateStaleStages();
+    const overlappingInitialize = store.initialize();
+    const overlappingIssue = store.issueApplyGrant(proposal, {
+      now: issuedAt,
+      signal,
+    });
+    const overlappingConsume = store.consumeApplyGrant(
+      "00000000-0000-4000-8000-000000000000",
+      proposal,
+      { now: issuedAt, signal },
+    );
+    await expect(overlappingRemediation).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(overlappingInitialize).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(overlappingIssue).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(overlappingConsume).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await Promise.resolve();
+    expect(providerCalls).toBe(1);
+
+    let closeSettled = false;
+    const close = store.close().finally(() => {
+      closeSettled = true;
+    });
+    acquired.resolve(lease);
+    await releaseStarted.promise;
+    await expect(readFile(stage)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(remediationSettled).toBe(false);
+    expect(closeSettled).toBe(false);
+    releaseGate.resolve(undefined);
+    await expect(remediation).resolves.toEqual({
+      headerStages: 1,
+      grantStages: 0,
+      receiptStages: 0,
+    });
+    await expect(close).resolves.toBeUndefined();
+    expect(releaseCalls).toBe(1);
+    await expect(store.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+  });
+
+  it("preserves overlapping initialize and enforces initialized, capacity, unhealthy, and closed ordering", async () => {
+    const overlapRoot = await approvalRoot();
+    const seed = configured(overlapRoot, {
+      randomUUID: uuidSource(["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]),
+    });
+    await seed.initialize();
+    await seed.close();
+    const gate = deferred<void>();
+    let blockedReads = 0;
+    let overlapProviderCalls = 0;
+    const overlapping = configured(overlapRoot, {
+      acquireExclusiveRootCustody: async () => {
+        overlapProviderCalls += 1;
+        return exactCustodyLease();
+      },
+      filesystem: {
+        ...nativeFilesystem,
+        readdir: async (path) => {
+          if (path === overlapRoot && blockedReads < 2) {
+            blockedReads += 1;
+            await gate.promise;
+          }
+          return await readdir(path);
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    const firstInitialize = overlapping.initialize();
+    const secondInitialize = overlapping.initialize();
+    for (let attempt = 0; blockedReads < 2 && attempt < 100; attempt += 1)
+      await new Promise<void>((resolveWait) => setImmediate(resolveWait));
+    expect(blockedReads).toBe(2);
+    await expect(overlapping.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    expect(overlapProviderCalls).toBe(0);
+    gate.resolve(undefined);
+    await expect(
+      Promise.all([firstInitialize, secondInitialize]),
+    ).resolves.toEqual([undefined, undefined]);
+    await expect(overlapping.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+
+    const capacityRoot = await approvalRoot();
+    for (let index = 0; index < PHASE3_APPROVAL_LIMITS.headerStages; index += 1)
+      await writeFile(join(capacityRoot, `.header-stage-${index}`), "", {
+        mode: 0o600,
+      });
+    const capacityStore = configured(capacityRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      randomUUID: uuidSource([
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      ]),
+    });
+    await expect(capacityStore.initialize()).rejects.toMatchObject({
+      code: "approval_capacity_exhausted",
+    });
+    await expect(capacityStore.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(readdir(capacityRoot)).resolves.toEqual([]);
+    const capacityRetry = configured(capacityRoot, {
+      randomUUID: uuidSource(["dddddddd-dddd-4ddd-8ddd-dddddddddddd"]),
+    });
+    await expect(capacityRetry.initialize()).resolves.toBeUndefined();
+
+    const unhealthyRoot = await approvalRoot();
+    await writeFile(join(unhealthyRoot, "unknown"), "", { mode: 0o600 });
+    let unhealthyProviderCalls = 0;
+    const unhealthyStore = configured(unhealthyRoot, {
+      acquireExclusiveRootCustody: async () => {
+        unhealthyProviderCalls += 1;
+        return exactCustodyLease();
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(unhealthyStore.initialize()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(unhealthyStore.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    expect(unhealthyProviderCalls).toBe(0);
+
+    const closedRoot = await approvalRoot();
+    const closedStore = configured(closedRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      randomUUID: uuidSource([]),
+    });
+    await closedStore.close();
+    await expect(closedStore.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+  });
+
+  it("removes every empty, partial, complete, and linked stage family in deterministic order", async () => {
+    const root = await approvalRoot();
+    await seedApprovalStore(root, true);
+    const headerPath = join(root, "header.json");
+    const slotPath = join(root, "slot-000");
+    const grantPath = join(slotPath, "grant.json");
+    const receiptPath = join(slotPath, "used.json");
+    const headerBytes = await readFile(headerPath);
+    const grantBytes = await readFile(grantPath);
+    const receiptBytes = await readFile(receiptPath);
+
+    await writeFile(join(root, ".header-stage-0"), "", { mode: 0o600 });
+    await writeFile(join(root, ".header-stage-1"), '{"header', {
+      mode: 0o600,
+    });
+    await writeFile(join(root, ".header-stage-2"), headerBytes, {
+      mode: 0o600,
+    });
+    await link(headerPath, join(root, ".header-stage-3"));
+
+    await mkdir(join(root, ".grant-stage-00"), { mode: 0o700 });
+    await mkdir(join(root, ".grant-stage-01"), { mode: 0o700 });
+    await writeFile(join(root, ".grant-stage-01", "grant.json"), '{"grant"', {
+      mode: 0o600,
+    });
+    await mkdir(join(root, ".grant-stage-02"), { mode: 0o700 });
+    await writeFile(join(root, ".grant-stage-02", "grant.json"), grantBytes, {
+      mode: 0o600,
+    });
+
+    await writeFile(join(slotPath, ".used-stage-0"), "", { mode: 0o600 });
+    await writeFile(join(slotPath, ".used-stage-1"), '{"receipt', {
+      mode: 0o600,
+    });
+    await writeFile(join(slotPath, ".used-stage-2"), receiptBytes, {
+      mode: 0o600,
+    });
+    await link(receiptPath, join(slotPath, ".used-stage-3"));
+
+    const headerBefore = await lstat(headerPath, { bigint: true });
+    const grantBefore = await lstat(grantPath, { bigint: true });
+    const receiptBefore = await lstat(receiptPath, { bigint: true });
+    expect(headerBefore.nlink).toBe(2n);
+    expect(receiptBefore.nlink).toBe(2n);
+    const operations: string[] = [];
+    const display = (path: string): string =>
+      path.slice(root.length + 1).replaceAll("\\", "/");
+    const filesystem: Phase3ApprovalFilesystem = {
+      ...nativeFilesystem,
+      rm: async (path, options) => {
+        operations.push(`rm:${display(path)}`);
+        await rm(path, options);
+      },
+      rmdir: async (path) => {
+        operations.push(`rmdir:${display(path)}`);
+        await rmdir(path);
+      },
+    };
+    const store = configured(root, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      filesystem,
+      randomUUID: uuidSource([]),
+    });
+    const counts = await store.remediateStaleStages();
+    expect(counts).toEqual({
+      headerStages: 4,
+      grantStages: 3,
+      receiptStages: 4,
+    });
+    expect(Object.isFrozen(counts)).toBe(true);
+    expect(operations).toEqual([
+      "rm:.header-stage-0",
+      "rm:.header-stage-1",
+      "rm:.header-stage-2",
+      "rm:.header-stage-3",
+      "rmdir:.grant-stage-00",
+      "rm:.grant-stage-01/grant.json",
+      "rmdir:.grant-stage-01",
+      "rm:.grant-stage-02/grant.json",
+      "rmdir:.grant-stage-02",
+      "rm:slot-000/.used-stage-0",
+      "rm:slot-000/.used-stage-1",
+      "rm:slot-000/.used-stage-2",
+      "rm:slot-000/.used-stage-3",
+    ]);
+    expect((await readdir(root)).sort()).toEqual(["header.json", "slot-000"]);
+    expect((await readdir(slotPath)).sort()).toEqual([
+      "grant.json",
+      "used.json",
+    ]);
+    expect(await readFile(headerPath)).toEqual(headerBytes);
+    expect(await readFile(grantPath)).toEqual(grantBytes);
+    expect(await readFile(receiptPath)).toEqual(receiptBytes);
+    const headerAfter = await lstat(headerPath, { bigint: true });
+    const grantAfter = await lstat(grantPath, { bigint: true });
+    const receiptAfter = await lstat(receiptPath, { bigint: true });
+    expectImmutableFile(headerAfter, headerBefore);
+    expectImmutableFile(grantAfter, grantBefore);
+    expectImmutableFile(receiptAfter, receiptBefore);
+    expect(headerAfter.nlink).toBe(1n);
+    expect(receiptAfter.nlink).toBe(1n);
+    expect(grantAfter.nlink).toBe(1n);
+    expect(grantAfter.mtimeNs).toBe(grantBefore.mtimeNs);
+    expect(grantAfter.ctimeNs).toBe(grantBefore.ctimeNs);
+  });
+
+  it("cleans exact fixed-stage capacity but rejects a headerless result", async () => {
+    const root = await approvalRoot();
+    for (let index = 0; index < PHASE3_APPROVAL_LIMITS.headerStages; index += 1)
+      await writeFile(join(root, `.header-stage-${index}`), "", {
+        mode: 0o600,
+      });
+    for (let index = 0; index < PHASE3_APPROVAL_LIMITS.grantStages; index += 1)
+      await mkdir(
+        join(root, `.grant-stage-${String(index).padStart(2, "0")}`),
+        { mode: 0o700 },
+      );
+    const store = configured(root, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      randomUUID: uuidSource([]),
+    });
+    await expect(store.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(readdir(root)).resolves.toEqual([]);
+  });
+
+  it("syncs and rejects an empty headerless root before fresh initialization", async () => {
+    const root = await approvalRoot();
+    const syncs: string[] = [];
+    const store = configured(root, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      durability: {
+        privateMode: () => true,
+        syncDirectory: async (path) => {
+          syncs.push(path);
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(store.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    expect(syncs).toEqual([root]);
+    await expect(readdir(root)).resolves.toEqual([]);
+
+    const retry = configured(root, {
+      randomUUID: uuidSource(["eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"]),
+    });
+    await expect(retry.initialize()).resolves.toBeUndefined();
+    await expect(readdir(root)).resolves.toEqual(["header.json"]);
+
+    const failedRoot = await approvalRoot();
+    let failedSyncs = 0;
+    const failed = configured(failedRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      durability: {
+        privateMode: () => true,
+        syncDirectory: async () => {
+          failedSyncs += 1;
+          throw ioFailure("empty root sync canary");
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(failed.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(failed.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    expect(failedSyncs).toBe(1);
+  });
+
+  it("does not retry transient root or slot scan failures before deletion", async () => {
+    const root = await approvalRoot();
+    const rootStage = join(root, ".header-stage-0");
+    await writeFile(rootStage, "", { mode: 0o600 });
+    let rootReads = 0;
+    let rootRemovals = 0;
+    const rootStore = configured(root, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      filesystem: {
+        ...nativeFilesystem,
+        readdir: async (path) => {
+          if (path === root && rootReads++ === 0)
+            throw ioFailure("transient root canary");
+          return await readdir(path);
+        },
+        rm: async (path, options) => {
+          rootRemovals += 1;
+          await rm(path, options);
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expectSanitizedFailure(
+      rootStore.remediateStaleStages(),
+      "approval_store_unhealthy",
+      root,
+    );
+    expect(rootReads).toBe(1);
+    expect(rootRemovals).toBe(0);
+    await expect(readFile(rootStage, "utf8")).resolves.toBe("");
+
+    const slotRoot = await approvalRoot();
+    await seedApprovalStore(slotRoot, true);
+    const slotStage = join(slotRoot, "slot-000", ".used-stage-0");
+    await writeFile(slotStage, "", { mode: 0o600 });
+    let slotReads = 0;
+    let slotRemovals = 0;
+    const slotStore = configured(slotRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      filesystem: {
+        ...nativeFilesystem,
+        readdir: async (path) => {
+          if (path === join(slotRoot, "slot-000") && slotReads++ === 0)
+            throw ioFailure("transient slot canary");
+          return await readdir(path);
+        },
+        rm: async (path, options) => {
+          slotRemovals += 1;
+          await rm(path, options);
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expectSanitizedFailure(
+      slotStore.remediateStaleStages(),
+      "approval_store_unhealthy",
+      slotRoot,
+    );
+    expect(slotReads).toBe(1);
+    expect(slotRemovals).toBe(0);
+    await expect(readFile(slotStage, "utf8")).resolves.toBe("");
+  });
+
+  it("rejects wrong keys, tamper, unknown, unsafe, duplicate, and unstable state before deletion", async () => {
+    const cases: Array<{
+      readonly name: string;
+      readonly prepare: (root: string) => Promise<void>;
+      readonly key?: Uint8Array;
+      readonly filesystem?: (root: string) => Phase3ApprovalFilesystem;
+    }> = [
+      {
+        name: "wrong key",
+        prepare: async (root) => {
+          await seedApprovalStore(root, false);
+          await writeFile(join(root, ".header-stage-0"), "", { mode: 0o600 });
+        },
+        key: otherKey,
+      },
+      {
+        name: "tampered final",
+        prepare: async (root) => {
+          await seedApprovalStore(root, false);
+          const path = join(root, "slot-000", "grant.json");
+          const envelope = JSON.parse(await readFile(path, "utf8")) as {
+            grantHmac: string;
+          };
+          envelope.grantHmac = "0".repeat(64);
+          await writeFile(path, canonicalJson(envelope), { mode: 0o600 });
+          await writeFile(join(root, ".header-stage-0"), "", { mode: 0o600 });
+        },
+      },
+      {
+        name: "complete tampered header stage",
+        prepare: async (root) => {
+          await seedApprovalStore(root, false);
+          const envelope = JSON.parse(
+            await readFile(join(root, "header.json"), "utf8"),
+          ) as { headerHmac: string };
+          envelope.headerHmac = "0".repeat(64);
+          await writeFile(
+            join(root, ".header-stage-0"),
+            canonicalJson(envelope),
+            { mode: 0o600 },
+          );
+        },
+      },
+      {
+        name: "complete wrong-key grant stage",
+        prepare: async (root) => {
+          await seedApprovalStore(root, false);
+          const otherRoot = await approvalRoot();
+          await seedApprovalStore(otherRoot, false, otherKey);
+          await mkdir(join(root, ".grant-stage-00"), { mode: 0o700 });
+          await writeFile(
+            join(root, ".grant-stage-00", "grant.json"),
+            await readFile(join(otherRoot, "slot-000", "grant.json")),
+            { mode: 0o600 },
+          );
+        },
+      },
+      {
+        name: "complete tampered receipt stage",
+        prepare: async (root) => {
+          await seedApprovalStore(root, true);
+          const envelope = JSON.parse(
+            await readFile(join(root, "slot-000", "used.json"), "utf8"),
+          ) as { receiptHmac: string };
+          envelope.receiptHmac = "0".repeat(64);
+          await writeFile(
+            join(root, "slot-000", ".used-stage-0"),
+            canonicalJson(envelope),
+            { mode: 0o600 },
+          );
+        },
+      },
+      {
+        name: "out-of-range header stage",
+        prepare: async (root) => {
+          await writeFile(join(root, ".header-stage-4"), "", { mode: 0o600 });
+        },
+      },
+      {
+        name: "out-of-range grant stage",
+        prepare: async (root) => {
+          await mkdir(join(root, ".grant-stage-32"), { mode: 0o700 });
+        },
+      },
+      {
+        name: "out-of-range receipt stage",
+        prepare: async (root) => {
+          await seedApprovalStore(root, false);
+          await writeFile(join(root, "slot-000", ".used-stage-4"), "", {
+            mode: 0o600,
+          });
+        },
+      },
+      {
+        name: "unknown root",
+        prepare: async (root) => {
+          await writeFile(join(root, ".header-stage-0"), "", { mode: 0o600 });
+          await writeFile(join(root, "unknown"), "", { mode: 0o600 });
+        },
+      },
+      {
+        name: "unsafe stage type",
+        prepare: async (root) => {
+          await mkdir(join(root, ".header-stage-0"), { mode: 0o700 });
+        },
+      },
+      {
+        name: "duplicate final grant",
+        prepare: async (root) => {
+          await seedApprovalStore(root, false);
+          await mkdir(join(root, "slot-001"), { mode: 0o700 });
+          await writeFile(
+            join(root, "slot-001", "grant.json"),
+            await readFile(join(root, "slot-000", "grant.json")),
+            { mode: 0o600 },
+          );
+          await writeFile(join(root, ".header-stage-0"), "", { mode: 0o600 });
+        },
+      },
+      {
+        name: "unsafe grant topology",
+        prepare: async (root) => {
+          await mkdir(join(root, ".grant-stage-00"), { mode: 0o700 });
+          await writeFile(join(root, ".grant-stage-00", "extra"), "", {
+            mode: 0o600,
+          });
+        },
+      },
+      {
+        name: "root instability",
+        prepare: async (root) => {
+          await writeFile(join(root, ".header-stage-0"), "", { mode: 0o600 });
+        },
+        filesystem: (root) => {
+          let rootStats = 0n;
+          return {
+            ...nativeFilesystem,
+            lstat: async (path, options) => {
+              const stats = await lstat(path, options);
+              if (path !== root) return stats;
+              rootStats += 1n;
+              return metadataWithCtime(stats, stats.ctimeNs + rootStats);
+            },
+          };
+        },
+      },
+      {
+        name: "inconsistent linked final count",
+        prepare: async (root) => {
+          await seedApprovalStore(root, false);
+          await link(join(root, "header.json"), join(root, ".header-stage-0"));
+        },
+        filesystem: (root) => {
+          const headerPath = join(root, "header.json");
+          return {
+            ...nativeFilesystem,
+            lstat: async (path, options) => {
+              const stats = await lstat(path, options);
+              return path === headerPath ? metadataWithNlink(stats, 1n) : stats;
+            },
+            open: async (path, flags, mode, lease) => {
+              const handle = await open(path, flags, mode);
+              if (path !== headerPath) return await leasedHandle(handle, lease);
+              return await leasedHandle(handle, lease, {
+                write: async (buffer, offset, length, position) =>
+                  await handle.write(buffer, offset, length, position),
+                sync: async () => await handle.sync(),
+                stat: async (options) =>
+                  metadataWithNlink(await handle.stat(options), 1n),
+                readFile: async () => await handle.readFile(),
+              });
+            },
+          };
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const root = await approvalRoot();
+      await testCase.prepare(root);
+      let removals = 0;
+      const baseFilesystem = testCase.filesystem?.(root) ?? nativeFilesystem;
+      const filesystem: Phase3ApprovalFilesystem = {
+        ...baseFilesystem,
+        rm: async (path, options) => {
+          removals += 1;
+          await baseFilesystem.rm(path, options);
+        },
+        rmdir: async (path) => {
+          removals += 1;
+          await baseFilesystem.rmdir(path);
+        },
+      };
+      const store = new DurablePhase3ApprovalGrants(root, testCase.key ?? key, {
+        acquireExclusiveRootCustody: async () => exactCustodyLease(),
+        durability: logicalDurability,
+        filesystem,
+        now: () => issuedAt,
+        randomUUID: uuidSource([]),
+      });
+      await expect(
+        store.remediateStaleStages(),
+        testCase.name,
+      ).rejects.toMatchObject({ code: "approval_store_unhealthy" });
+      expect(removals, testCase.name).toBe(0);
+    }
+  });
+
+  it("reconciles file disappearance, no-op, substitution, sync failure, and partial progress", async () => {
+    const committedRoot = await approvalRoot();
+    await seedApprovalStore(committedRoot, false);
+    const committedStage = join(committedRoot, ".header-stage-0");
+    await writeFile(committedStage, "", { mode: 0o600 });
+    const committed = configured(committedRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      filesystem: {
+        ...nativeFilesystem,
+        rm: async (path, options) => {
+          await rm(path, options);
+          throw ioFailure("committed remove canary");
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(committed.remediateStaleStages()).resolves.toEqual({
+      headerStages: 1,
+      grantStages: 0,
+      receiptStages: 0,
+    });
+
+    const noOpRoot = await approvalRoot();
+    const noOpStage = join(noOpRoot, ".header-stage-0");
+    await writeFile(noOpStage, "", { mode: 0o600 });
+    let noOpReleases = 0;
+    const noOp = configured(noOpRoot, {
+      acquireExclusiveRootCustody: async () =>
+        exactCustodyLease(async () => {
+          noOpReleases += 1;
+        }),
+      filesystem: {
+        ...nativeFilesystem,
+        rm: async () => {},
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(noOp.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    expect(noOpReleases).toBe(1);
+    await expect(readFile(noOpStage, "utf8")).resolves.toBe("");
+
+    const substitutedRoot = await approvalRoot();
+    const substitutedStage = join(substitutedRoot, ".header-stage-0");
+    await writeFile(substitutedStage, "first", { mode: 0o600 });
+    const substituted = configured(substitutedRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      filesystem: {
+        ...nativeFilesystem,
+        rm: async (path, options) => {
+          await rm(path, options);
+          await writeFile(path, "replacement", { mode: 0o600 });
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(substituted.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(readFile(substitutedStage, "utf8")).resolves.toBe(
+      "replacement",
+    );
+
+    const syncRoot = await approvalRoot();
+    await seedApprovalStore(syncRoot, false);
+    const syncStage = join(syncRoot, ".header-stage-0");
+    await writeFile(syncStage, "", { mode: 0o600 });
+    const syncFailure = configured(syncRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      durability: {
+        privateMode: () => true,
+        syncDirectory: async () => {
+          throw ioFailure("sync canary");
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(syncFailure.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(readFile(syncStage)).rejects.toMatchObject({ code: "ENOENT" });
+    const syncRetryEvents: string[] = [];
+    const syncRetry = configured(syncRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      durability: {
+        privateMode: () => true,
+        syncDirectory: async (path) => {
+          syncRetryEvents.push(path);
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(syncRetry.remediateStaleStages()).resolves.toEqual({
+      headerStages: 0,
+      grantStages: 0,
+      receiptStages: 0,
+    });
+    expect(syncRetryEvents).toEqual([syncRoot, join(syncRoot, "slot-000")]);
+
+    const partialRoot = await approvalRoot();
+    await seedApprovalStore(partialRoot, false);
+    const firstStage = join(partialRoot, ".header-stage-0");
+    const secondStage = join(partialRoot, ".header-stage-1");
+    await writeFile(firstStage, "", { mode: 0o600 });
+    await writeFile(secondStage, "", { mode: 0o600 });
+    const partial = configured(partialRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      filesystem: {
+        ...nativeFilesystem,
+        rm: async (path, options) => {
+          if (path === secondStage) throw ioFailure("before-effect canary");
+          await rm(path, options);
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(partial.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(readFile(firstStage)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(secondStage, "utf8")).resolves.toBe("");
+    const retry = configured(partialRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      randomUUID: uuidSource([]),
+    });
+    await expect(retry.remediateStaleStages()).resolves.toEqual({
+      headerStages: 1,
+      grantStages: 0,
+      receiptStages: 0,
+    });
+  });
+
+  it("retries receipt durability uncertainty and rejects a second reconciliation sync failure", async () => {
+    const root = await approvalRoot();
+    await seedApprovalStore(root, true);
+    const slot = join(root, "slot-000");
+    const stage = join(slot, ".used-stage-0");
+    await writeFile(stage, "", { mode: 0o600 });
+    const uncertain = configured(root, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      durability: {
+        privateMode: () => true,
+        syncDirectory: async (path) => {
+          if (path === slot) throw ioFailure("receipt sync canary");
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(uncertain.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(readFile(stage)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const failedReconciliationSyncs: string[] = [];
+    const failedReconciliation = configured(root, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      durability: {
+        privateMode: () => true,
+        syncDirectory: async (path) => {
+          failedReconciliationSyncs.push(path);
+          if (path === slot) throw ioFailure("reconciliation sync canary");
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(
+      failedReconciliation.remediateStaleStages(),
+    ).rejects.toMatchObject({ code: "approval_store_unhealthy" });
+    expect(failedReconciliationSyncs).toEqual([root, slot]);
+
+    const retrySyncs: string[] = [];
+    const retry = configured(root, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      durability: {
+        privateMode: () => true,
+        syncDirectory: async (path) => {
+          retrySyncs.push(path);
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(retry.remediateStaleStages()).resolves.toEqual({
+      headerStages: 0,
+      grantStages: 0,
+      receiptStages: 0,
+    });
+    expect(retrySyncs).toEqual([root, slot]);
+  });
+
+  it("covers every grant-stage removal step and fresh-instance retry", async () => {
+    const grantStage = async (
+      filesystem: (
+        root: string,
+        stage: string,
+        child: string,
+      ) => Phase3ApprovalFilesystem,
+      durability: (root: string, stage: string) => Phase2DurabilityPort = () =>
+        logicalDurability,
+    ): Promise<{
+      readonly root: string;
+      readonly stage: string;
+      readonly child: string;
+      readonly store: DurablePhase3ApprovalGrants;
+    }> => {
+      const root = await approvalRoot();
+      await seedApprovalStore(root, false);
+      const stage = join(root, ".grant-stage-00");
+      const child = join(stage, "grant.json");
+      await mkdir(stage, { mode: 0o700 });
+      await writeFile(child, '{"grant"', { mode: 0o600 });
+      return {
+        root,
+        stage,
+        child,
+        store: configured(root, {
+          acquireExclusiveRootCustody: async () => exactCustodyLease(),
+          durability: durability(root, stage),
+          filesystem: filesystem(root, stage, child),
+          randomUUID: uuidSource([]),
+        }),
+      };
+    };
+
+    const childFailure = await grantStage((_root, _stage, child) => ({
+      ...nativeFilesystem,
+      rm: async (path, options) => {
+        if (path === child) throw ioFailure("child before-effect canary");
+        await rm(path, options);
+      },
+    }));
+    await expect(
+      childFailure.store.remediateStaleStages(),
+    ).rejects.toMatchObject({ code: "approval_store_unhealthy" });
+    await expect(readFile(childFailure.child, "utf8")).resolves.toBe(
+      '{"grant"',
+    );
+
+    const stageSyncFailure = await grantStage(
+      () => nativeFilesystem,
+      (_root, stage) => ({
+        privateMode: () => true,
+        syncDirectory: async (path) => {
+          if (path === stage) throw ioFailure("stage sync canary");
+        },
+      }),
+    );
+    await expect(
+      stageSyncFailure.store.remediateStaleStages(),
+    ).rejects.toMatchObject({ code: "approval_store_unhealthy" });
+    await expect(readFile(stageSyncFailure.child)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readdir(stageSyncFailure.stage)).resolves.toEqual([]);
+
+    const substitution = await grantStage((_root, stage, child) => ({
+      ...nativeFilesystem,
+      rm: async (path, options) => {
+        await rm(path, options);
+        if (path === child) {
+          await rmdir(stage);
+          await mkdir(stage, { mode: 0o700 });
+        }
+      },
+    }));
+    await expect(
+      substitution.store.remediateStaleStages(),
+    ).rejects.toMatchObject({ code: "approval_store_unhealthy" });
+    await expect(readdir(substitution.stage)).resolves.toEqual([]);
+
+    const rmdirFailure = await grantStage((_root, stage) => ({
+      ...nativeFilesystem,
+      rmdir: async (path) => {
+        if (path === stage) throw ioFailure("rmdir before-effect canary");
+        await rmdir(path);
+      },
+    }));
+    await expect(
+      rmdirFailure.store.remediateStaleStages(),
+    ).rejects.toMatchObject({ code: "approval_store_unhealthy" });
+    await expect(readdir(rmdirFailure.stage)).resolves.toEqual([]);
+
+    const committedRmdir = await grantStage((_root, stage) => ({
+      ...nativeFilesystem,
+      rmdir: async (path) => {
+        await rmdir(path);
+        if (path === stage) throw ioFailure("rmdir committed canary");
+      },
+    }));
+    await expect(committedRmdir.store.remediateStaleStages()).resolves.toEqual({
+      headerStages: 0,
+      grantStages: 1,
+      receiptStages: 0,
+    });
+
+    const rootSyncFailure = await grantStage(
+      () => nativeFilesystem,
+      (root) => ({
+        privateMode: () => true,
+        syncDirectory: async (path) => {
+          if (path === root) throw ioFailure("root sync canary");
+        },
+      }),
+    );
+    await expect(
+      rootSyncFailure.store.remediateStaleStages(),
+    ).rejects.toMatchObject({ code: "approval_store_unhealthy" });
+    await expect(readdir(rootSyncFailure.root)).resolves.toEqual([
+      "header.json",
+      "slot-000",
+    ]);
+
+    for (const retryable of [
+      childFailure,
+      stageSyncFailure,
+      substitution,
+      rmdirFailure,
+    ]) {
+      const retry = configured(retryable.root, {
+        acquireExclusiveRootCustody: async () => exactCustodyLease(),
+        randomUUID: uuidSource([]),
+      });
+      await expect(retry.remediateStaleStages()).resolves.toEqual({
+        headerStages: 0,
+        grantStages: 1,
+        receiptStages: 0,
+      });
+    }
+    const absentRetrySyncs: string[] = [];
+    const absentRetry = configured(rootSyncFailure.root, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      durability: {
+        privateMode: () => true,
+        syncDirectory: async (path) => {
+          absentRetrySyncs.push(path);
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(absentRetry.remediateStaleStages()).resolves.toEqual({
+      headerStages: 0,
+      grantStages: 0,
+      receiptStages: 0,
+    });
+    expect(absentRetrySyncs).toEqual([
+      rootSyncFailure.root,
+      join(rootSyncFailure.root, "slot-000"),
+    ]);
+  });
+
+  it("fails closed on grant extra-child and invalid rmdir-result outcomes", async () => {
+    const extraRoot = await approvalRoot();
+    const extraStage = join(extraRoot, ".grant-stage-00");
+    await mkdir(extraStage, { mode: 0o700 });
+    const extra = configured(extraRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      filesystem: {
+        ...nativeFilesystem,
+        rmdir: async (path) => {
+          await writeFile(join(path, "extra"), "", { mode: 0o600 });
+          await rmdir(path);
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(extra.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(readdir(extraStage)).resolves.toEqual(["extra"]);
+
+    const invalidRoot = await approvalRoot();
+    const invalidStage = join(invalidRoot, ".grant-stage-00");
+    await mkdir(invalidStage, { mode: 0o700 });
+    const invalid = configured(invalidRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      filesystem: {
+        ...nativeFilesystem,
+        rmdir: (async () => "invalid") as unknown as (
+          path: string,
+        ) => Promise<void>,
+      },
+      randomUUID: uuidSource([]),
+    });
+    await expect(invalid.remediateStaleStages()).rejects.toMatchObject({
+      code: "approval_store_unhealthy",
+    });
+    await expect(readdir(invalidStage)).resolves.toEqual([]);
+  });
+
+  it("strictly rescans finals and zeroes scan buffers on success and failure", async () => {
+    const failureRoot = await approvalRoot();
+    await seedApprovalStore(failureRoot, false);
+    const failureHeader = join(failureRoot, "header.json");
+    const originalHeader = await readFile(failureHeader);
+    await writeFile(join(failureRoot, ".header-stage-0"), "", { mode: 0o600 });
+    let mutateFinal = true;
+    const failing = configured(failureRoot, {
+      acquireExclusiveRootCustody: async () => exactCustodyLease(),
+      durability: {
+        privateMode: () => true,
+        syncDirectory: async (path) => {
+          if (path === failureRoot && mutateFinal) {
+            mutateFinal = false;
+            const envelope = JSON.parse(
+              await readFile(failureHeader, "utf8"),
+            ) as { headerHmac: string };
+            envelope.headerHmac = "0".repeat(64);
+            await writeFile(failureHeader, canonicalJson(envelope), {
+              mode: 0o600,
+            });
+          }
+        },
+      },
+      randomUUID: uuidSource([]),
+    });
+    const failureTracking = trackBufferZeroing();
+    try {
+      await expect(failing.remediateStaleStages()).rejects.toMatchObject({
+        code: "approval_store_unhealthy",
+      });
+      const failureScanEvents = failureTracking.events.filter(
+        (event) => Buffer.compare(event.before, originalHeader) === 0,
+      );
+      expect(failureScanEvents.length).toBeGreaterThan(0);
+      expect(failureScanEvents.every((event) => isZeroed(event.buffer))).toBe(
+        true,
+      );
+    } finally {
+      failureTracking.restore();
+    }
+    expect(await readFile(failureHeader)).not.toEqual(originalHeader);
+
+    const successRoot = await approvalRoot();
+    await seedApprovalStore(successRoot, true);
+    const successHeader = await readFile(join(successRoot, "header.json"));
+    await writeFile(join(successRoot, ".header-stage-0"), successHeader, {
+      mode: 0o600,
+    });
+    const tracking = trackBufferZeroing();
+    try {
+      const success = configured(successRoot, {
+        acquireExclusiveRootCustody: async () => exactCustodyLease(),
+        randomUUID: uuidSource([]),
+      });
+      await expect(success.remediateStaleStages()).resolves.toEqual({
+        headerStages: 1,
+        grantStages: 0,
+        receiptStages: 0,
+      });
+      const scanEvents = tracking.events.filter(
+        (event) => Buffer.compare(event.before, successHeader) === 0,
+      );
+      expect(scanEvents.length).toBeGreaterThan(0);
+      expect(scanEvents.every((event) => isZeroed(event.buffer))).toBe(true);
+    } finally {
+      tracking.restore();
+    }
+  });
+
+  it.runIf(process.platform === "win32")(
+    "requires injected logical durability for remediation on Windows",
+    async () => {
+      const root = await approvalRoot();
+      const stage = join(root, ".header-stage-0");
+      await writeFile(stage, "", { mode: 0o600 });
+      let releases = 0;
+      const store = new DurablePhase3ApprovalGrants(root, key, {
+        acquireExclusiveRootCustody: async () =>
+          exactCustodyLease(async () => {
+            releases += 1;
+          }),
+      });
+      await expect(store.remediateStaleStages()).rejects.toMatchObject({
+        code: "approval_store_unhealthy",
+      });
+      expect(releases).toBe(1);
+      await expect(readFile(stage, "utf8")).resolves.toBe("");
+    },
+  );
+});
+
+function exactCustodyLease(
+  release: () => Promise<void> = async () => {},
+): Phase3ApprovalCustodyLease {
+  return Object.freeze({ release });
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value) => {
+      if (!resolvePromise) throw new Error("deferred is unavailable");
+      const resolve = resolvePromise;
+      resolvePromise = undefined;
+      resolve(value);
+    },
+  };
+}
+
+async function seedApprovalStore(
+  root: string,
+  consume: boolean,
+  secret: Uint8Array = key,
+): Promise<void> {
+  const store = new DurablePhase3ApprovalGrants(root, secret, {
+    durability: logicalDurability,
+    now: () => issuedAt,
+    randomUUID: uuidSource([
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ]),
+  });
+  await store.initialize();
+  const grant = await store.issueApplyGrant(proposal, {
+    now: issuedAt,
+    signal,
+  });
+  if (consume)
+    await store.consumeApplyGrant(grant.grantId, proposal, {
+      now: issuedAt + 1,
+      signal,
+    });
+  await store.close();
+}
+
+function expectImmutableFile(actual: BigIntStats, expected: BigIntStats): void {
+  expect({
+    dev: actual.dev,
+    ino: actual.ino,
+    mode: actual.mode,
+    uid: actual.uid,
+    gid: actual.gid,
+    size: actual.size,
+    isFile: actual.isFile(),
+    isDirectory: actual.isDirectory(),
+  }).toEqual({
+    dev: expected.dev,
+    ino: expected.ino,
+    mode: expected.mode,
+    uid: expected.uid,
+    gid: expected.gid,
+    size: expected.size,
+    isFile: expected.isFile(),
+    isDirectory: expected.isDirectory(),
+  });
+}
+
+function metadataWithCtime(
+  metadata: BigIntStats,
+  ctimeNs: bigint,
+): BigIntStats {
+  const clone = Object.create(
+    Object.getPrototypeOf(metadata) as object,
+  ) as BigIntStats;
+  Object.defineProperties(clone, Object.getOwnPropertyDescriptors(metadata));
+  Object.defineProperty(clone, "ctimeNs", {
+    configurable: true,
+    enumerable: true,
+    value: ctimeNs,
+    writable: true,
+  });
+  return clone;
+}
+
+function metadataWithNlink(metadata: BigIntStats, nlink: bigint): BigIntStats {
+  const clone = Object.create(
+    Object.getPrototypeOf(metadata) as object,
+  ) as BigIntStats;
+  Object.defineProperties(clone, Object.getOwnPropertyDescriptors(metadata));
+  Object.defineProperty(clone, "nlink", {
+    configurable: true,
+    enumerable: true,
+    value: nlink,
+    writable: true,
+  });
+  return clone;
+}
 
 async function approvalRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "phase3-approval-"));

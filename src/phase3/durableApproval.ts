@@ -8,8 +8,10 @@ import {
   readdir,
   rename,
   rm,
+  rmdir,
 } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
+import { types } from "node:util";
 import { z } from "zod";
 import {
   strictPhase2Durability,
@@ -131,6 +133,20 @@ export interface Phase3ApprovalOpenLease {
   register(cleanup: () => Promise<void>): void;
 }
 
+export interface Phase3ApprovalCustodyLease {
+  readonly release: () => Promise<void>;
+}
+
+export type Phase3ApprovalCustodyProvider = (
+  root: string,
+) => Promise<Phase3ApprovalCustodyLease>;
+
+export interface Phase3ApprovalRemediationCounts {
+  readonly headerStages: number;
+  readonly grantStages: number;
+  readonly receiptStages: number;
+}
+
 export interface Phase3ApprovalFilesystem {
   readonly lstat: (
     path: string,
@@ -150,9 +166,11 @@ export interface Phase3ApprovalFilesystem {
     path: string,
     options: { force: boolean; recursive?: boolean },
   ) => Promise<void>;
+  readonly rmdir: (path: string) => Promise<void>;
 }
 
 export interface DurablePhase3ApprovalOptions {
+  readonly acquireExclusiveRootCustody?: Phase3ApprovalCustodyProvider;
   readonly durability?: Phase2DurabilityPort;
   readonly filesystem?: Phase3ApprovalFilesystem;
   readonly hooks?: Phase3ApprovalHooks;
@@ -281,6 +299,7 @@ interface TrustedPhase3ApprovalFilesystem {
     path: string,
     options: { force: boolean; recursive?: boolean },
   ) => Promise<void>;
+  readonly rmdir: (path: string) => Promise<void>;
 }
 
 interface StoredGrant {
@@ -298,6 +317,46 @@ interface ScannedStore {
   readonly header?: HeaderEnvelope;
   readonly grants: Map<string, StoredGrant>;
   readonly slots: Set<string>;
+}
+
+interface RemediationFile {
+  readonly name: string;
+  readonly path: string;
+  readonly metadata: ApprovalMetadata;
+  readonly bytes: Buffer;
+}
+
+interface RemediationGrantStage {
+  readonly name: string;
+  readonly path: string;
+  readonly metadata: ApprovalMetadata;
+  readonly children: readonly string[];
+  readonly grant?: RemediationFile;
+}
+
+interface RemediationFinal extends RemediationFile {
+  metadata: ApprovalMetadata;
+}
+
+interface RemediationSlot {
+  readonly name: string;
+  readonly path: string;
+  readonly metadata: ApprovalMetadata;
+  readonly children: readonly string[];
+  readonly grant: RemediationFinal;
+  readonly grantEnvelope: GrantEnvelope;
+  readonly receipt?: RemediationFinal;
+  readonly receiptStages: readonly RemediationFile[];
+}
+
+interface RemediationScan {
+  readonly rootMetadata: ApprovalMetadata;
+  readonly rootEntries: readonly string[];
+  readonly header?: RemediationFinal;
+  readonly headerStages: readonly RemediationFile[];
+  readonly grantStages: readonly RemediationGrantStage[];
+  readonly slots: readonly RemediationSlot[];
+  readonly buffers: readonly Buffer[];
 }
 
 const defaultFilesystem: Phase3ApprovalFilesystem = Object.freeze({
@@ -324,6 +383,7 @@ const defaultFilesystem: Phase3ApprovalFilesystem = Object.freeze({
   link,
   rename,
   rm,
+  rmdir,
 });
 
 const preservedBoundaryErrnos = new Set([
@@ -484,6 +544,11 @@ function protectedFilesystem(
         async () => await filesystem.rm(path, options),
         copyUndefined,
       ),
+    rmdir: async (path) =>
+      await callBoundary(
+        async () => await filesystem.rmdir(path),
+        copyUndefined,
+      ),
   };
   return Object.freeze(protectedValue);
 }
@@ -641,9 +706,45 @@ function copyMetadata(value: unknown): ApprovalMetadata {
   return Object.freeze(snapshot as ApprovalMetadata);
 }
 
+function copyCustodyLease(value: unknown): {
+  readonly lease: Phase3ApprovalCustodyLease;
+  readonly release: BoundaryMethod;
+} {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    types.isProxy(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    !Object.isFrozen(value)
+  )
+    throw new Error("invalid custody lease");
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== 1 || keys[0] !== "release")
+    throw new Error("invalid custody lease");
+  const descriptor = Reflect.getOwnPropertyDescriptor(value, "release");
+  if (
+    !descriptor ||
+    !("value" in descriptor) ||
+    descriptor.enumerable !== true ||
+    descriptor.configurable !== false ||
+    descriptor.writable !== false
+  )
+    throw new Error("invalid custody lease");
+  const release: unknown = descriptor.value;
+  if (typeof release !== "function" || types.isProxy(release))
+    throw new Error("invalid custody release");
+  return Object.freeze({
+    lease: value as Phase3ApprovalCustodyLease,
+    release: release as BoundaryMethod,
+  });
+}
+
 export class DurablePhase3ApprovalGrants implements Phase3ApprovalPort {
   private readonly root: string;
   private readonly key: Buffer;
+  private readonly acquireExclusiveRootCustody:
+    | Phase3ApprovalCustodyProvider
+    | undefined;
   private readonly durability: Phase2DurabilityPort;
   private readonly filesystem: TrustedPhase3ApprovalFilesystem;
   private readonly hooks: Phase3ApprovalHooks;
@@ -656,6 +757,7 @@ export class DurablePhase3ApprovalGrants implements Phase3ApprovalPort {
   private grants = new Map<string, StoredGrant>();
   private lifecycle: "open" | "closing" | "closed" = "open";
   private inFlight = 0;
+  private remediationReserved = false;
   private readonly closeWaiters: Array<() => void> = [];
   private closePromise: Promise<void> | undefined;
 
@@ -668,17 +770,24 @@ export class DurablePhase3ApprovalGrants implements Phase3ApprovalPort {
       throw unhealthy("Approval root must be absolute and normalized");
     if (key.byteLength !== 32)
       throw unhealthy("Approval key must be exactly 32 bytes");
+    let acquireExclusiveRootCustody: Phase3ApprovalCustodyProvider | undefined;
     let durability: Phase2DurabilityPort | undefined;
     let filesystem: Phase3ApprovalFilesystem | undefined;
     let hooks: Phase3ApprovalHooks | undefined;
     let now: (() => number) | undefined;
     let uuid: (() => string) | undefined;
     try {
+      acquireExclusiveRootCustody = options.acquireExclusiveRootCustody;
       durability = options.durability;
       filesystem = options.filesystem;
       hooks = options.hooks;
       now = options.now;
       uuid = options.randomUUID;
+      if (
+        acquireExclusiveRootCustody !== undefined &&
+        typeof acquireExclusiveRootCustody !== "function"
+      )
+        throw new Error("invalid custody provider");
       if (now !== undefined && typeof now !== "function")
         throw new Error("invalid clock");
       if (uuid !== undefined && typeof uuid !== "function")
@@ -688,6 +797,7 @@ export class DurablePhase3ApprovalGrants implements Phase3ApprovalPort {
     }
     this.root = root;
     this.key = Buffer.from(key);
+    this.acquireExclusiveRootCustody = acquireExclusiveRootCustody;
     this.nativeDurability = durability === undefined;
     this.durability = protectedDurability(durability ?? strictPhase2Durability);
     this.filesystem = protectedFilesystem(filesystem ?? defaultFilesystem);
@@ -801,6 +911,27 @@ export class DurablePhase3ApprovalGrants implements Phase3ApprovalPort {
     });
   }
 
+  remediateStaleStages(): Promise<Phase3ApprovalRemediationCounts> {
+    if (
+      this.lifecycle !== "open" ||
+      this.initialized ||
+      this.unhealthy ||
+      this.remediationReserved ||
+      this.inFlight !== 0
+    )
+      return Promise.reject(
+        unhealthy("Approval stale-stage remediation is unavailable"),
+      );
+    this.remediationReserved = true;
+    this.inFlight += 1;
+    return Promise.resolve()
+      .then(async () => await this.remediateWithCustody())
+      .finally(() => {
+        this.remediationReserved = false;
+        this.finishInFlight();
+      });
+  }
+
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.lifecycle = "closing";
@@ -823,14 +954,22 @@ export class DurablePhase3ApprovalGrants implements Phase3ApprovalPort {
   private run<T>(operation: () => Promise<T>): Promise<T> {
     if (this.lifecycle !== "open")
       return Promise.reject(unhealthy("Approval store is closed"));
+    if (this.remediationReserved)
+      return Promise.reject(
+        unhealthy("Approval stale-stage remediation is reserved"),
+      );
     this.inFlight += 1;
     return Promise.resolve()
       .then(operation)
       .finally(() => {
-        this.inFlight -= 1;
-        if (this.inFlight === 0)
-          for (const waiter of this.closeWaiters.splice(0)) waiter();
+        this.finishInFlight();
       });
+  }
+
+  private finishInFlight(): void {
+    this.inFlight -= 1;
+    if (this.inFlight === 0)
+      for (const waiter of this.closeWaiters.splice(0)) waiter();
   }
 
   private assertHealthy(): void {
@@ -1426,6 +1565,686 @@ export class DurablePhase3ApprovalGrants implements Phase3ApprovalPort {
     }
   }
 
+  private async remediateWithCustody(): Promise<Phase3ApprovalRemediationCounts> {
+    const acquire = this.acquireExclusiveRootCustody;
+    if (!acquire) {
+      this.unhealthy = true;
+      throw unhealthy("Approval root custody acquisition failed");
+    }
+    let custody:
+      | {
+          readonly lease: Phase3ApprovalCustodyLease;
+          readonly release: BoundaryMethod;
+        }
+      | undefined;
+    try {
+      const candidate = await Reflect.apply(acquire, undefined, [this.root]);
+      custody = copyCustodyLease(candidate);
+    } catch {
+      this.unhealthy = true;
+      throw unhealthy("Approval root custody acquisition failed");
+    }
+
+    let counts: Phase3ApprovalRemediationCounts | undefined;
+    let remediationFailed = false;
+    try {
+      counts = await this.remediateUnderCustody();
+    } catch {
+      remediationFailed = true;
+    } finally {
+      try {
+        copyUndefined(await Reflect.apply(custody.release, custody.lease, []));
+      } catch {
+        remediationFailed = true;
+      }
+    }
+    if (remediationFailed || !counts) {
+      this.unhealthy = true;
+      throw unhealthy("Approval stale-stage remediation failed");
+    }
+    return counts;
+  }
+
+  private async remediateUnderCustody(): Promise<Phase3ApprovalRemediationCounts> {
+    if (this.nativeDurability && process.platform !== "linux")
+      throw unhealthy("Native approval durability requires Linux");
+    const scanned = await this.scanRemediationOnce();
+    let finalScan: RemediationScan | undefined;
+    try {
+      let rootMetadata = scanned.rootMetadata;
+      let rootEntries = [...scanned.rootEntries];
+      let headerStages = 0;
+      let grantStages = 0;
+      let receiptStages = 0;
+
+      for (const stage of scanned.headerStages) {
+        const removed = await this.removeRemediationFile(
+          stage,
+          this.root,
+          rootMetadata,
+          rootEntries,
+          scanned.header
+            ? {
+                final: scanned.header,
+                authenticate: (bytes) => {
+                  this.parseHeader(bytes);
+                },
+                limit: PHASE3_APPROVAL_LIMITS.headerBytes,
+              }
+            : undefined,
+        );
+        rootMetadata = removed;
+        rootEntries = withoutEntry(rootEntries, stage.name);
+        headerStages += 1;
+      }
+
+      for (const stage of scanned.grantStages) {
+        const removed = await this.removeRemediationGrantStage(
+          stage,
+          rootMetadata,
+          rootEntries,
+        );
+        rootMetadata = removed;
+        rootEntries = withoutEntry(rootEntries, stage.name);
+        grantStages += 1;
+      }
+
+      for (const slot of scanned.slots) {
+        let slotMetadata = slot.metadata;
+        let slotEntries = [...slot.children];
+        for (const stage of slot.receiptStages) {
+          const removed = await this.removeRemediationFile(
+            stage,
+            slot.path,
+            slotMetadata,
+            slotEntries,
+            slot.receipt
+              ? {
+                  final: slot.receipt,
+                  authenticate: (bytes) => {
+                    this.parseReceipt(bytes, slot.grantEnvelope);
+                  },
+                  limit: PHASE3_APPROVAL_LIMITS.receiptBytes,
+                }
+              : undefined,
+          );
+          slotMetadata = removed;
+          slotEntries = withoutEntry(slotEntries, stage.name);
+          receiptStages += 1;
+        }
+      }
+
+      if (scanned.header) {
+        await this.durability.syncDirectory(this.root);
+        for (const slot of scanned.slots)
+          await this.durability.syncDirectory(slot.path);
+      }
+      finalScan = await this.scanRemediationOnce();
+      if (!finalScan.header && finalScan.rootEntries.length === 0) {
+        await this.durability.syncDirectory(this.root);
+        throw unhealthy("Approval header is missing");
+      }
+      this.assertFinalRemediationScan(
+        scanned,
+        finalScan,
+        rootMetadata,
+        rootEntries,
+      );
+      return Object.freeze({ headerStages, grantStages, receiptStages });
+    } finally {
+      zeroRemediationScan(finalScan);
+      zeroRemediationScan(scanned);
+    }
+  }
+
+  private async scanRemediationOnce(): Promise<RemediationScan> {
+    const buffers: Buffer[] = [];
+    try {
+      const rootMetadata = await this.assertDirectory(this.root);
+      const rootEntries = sortedUniqueDirectoryEntries(
+        await this.filesystem.readdir(this.root),
+        PHASE3_APPROVAL_LIMITS.rootScanEntries,
+        "Approval root topology is unsafe",
+      );
+      const headerName = rootEntries.includes("header.json");
+      const slotNames: string[] = [];
+      const headerStageNames: string[] = [];
+      const grantStageNames: string[] = [];
+      for (const name of rootEntries) {
+        if (name === "header.json") continue;
+        const headerStage = headerStagePattern.exec(name);
+        if (headerStage) {
+          headerStageNames.push(name);
+          continue;
+        }
+        const grantStage = grantStagePattern.exec(name);
+        if (
+          grantStage &&
+          Number(grantStage[1]) < PHASE3_APPROVAL_LIMITS.grantStages
+        ) {
+          grantStageNames.push(name);
+          continue;
+        }
+        const slot = slotPattern.exec(name);
+        if (slot && Number(slot[1]) < PHASE3_APPROVAL_LIMITS.slots) {
+          slotNames.push(name);
+          continue;
+        }
+        throw unhealthy("Approval root contains an unknown artifact");
+      }
+      if (!headerName && slotNames.length !== 0)
+        throw unhealthy("Approval header is missing");
+
+      let header: RemediationFinal | undefined;
+      if (headerName) {
+        const stable = await this.readStableFile(
+          join(this.root, "header.json"),
+          PHASE3_APPROVAL_LIMITS.headerBytes,
+          true,
+          true,
+        );
+        buffers.push(stable.bytes);
+        this.parseHeader(stable.bytes);
+        header = {
+          name: "header.json",
+          path: join(this.root, "header.json"),
+          metadata: stable.metadata,
+          bytes: stable.bytes,
+        };
+      }
+
+      const slots: RemediationSlot[] = [];
+      const grantIds = new Set<string>();
+      for (const slotName of slotNames) {
+        const slot = await this.scanRemediationSlot(slotName, buffers);
+        if (grantIds.has(slot.grantEnvelope.grant.grantId))
+          throw unhealthy("Approval store contains duplicate grant IDs");
+        grantIds.add(slot.grantEnvelope.grant.grantId);
+        slots.push(slot);
+      }
+
+      const headerStages: RemediationFile[] = [];
+      for (const name of headerStageNames) {
+        const stage = await this.readRemediationStage(
+          this.root,
+          name,
+          PHASE3_APPROVAL_LIMITS.headerBytes,
+          buffers,
+        );
+        this.authenticatePotentialStage(stage.bytes, (bytes) => {
+          this.parseHeader(bytes);
+        });
+        headerStages.push(stage);
+      }
+      validateRemediationAliasTopology(
+        header,
+        headerStages,
+        "Approval header link topology is unsafe",
+      );
+
+      const grantStages: RemediationGrantStage[] = [];
+      for (const name of grantStageNames) {
+        const path = join(this.root, name);
+        const metadata = await this.assertDirectory(path);
+        const children = sortedUniqueDirectoryEntries(
+          await this.filesystem.readdir(path),
+          1,
+          "Approval grant stage topology is unsafe",
+        );
+        if (children.length === 1 && children[0] !== "grant.json")
+          throw unhealthy("Approval grant stage topology is unsafe");
+        let grant: RemediationFile | undefined;
+        if (children[0] === "grant.json") {
+          grant = await this.readRemediationStage(
+            path,
+            "grant.json",
+            PHASE3_APPROVAL_LIMITS.grantBytes,
+            buffers,
+            false,
+          );
+          this.authenticatePotentialStage(grant.bytes, (bytes) => {
+            this.parseGrant(bytes);
+          });
+        }
+        const after = await this.assertDirectory(path);
+        if (!sameNode(metadata, after))
+          throw unhealthy("Approval grant stage identity changed");
+        grantStages.push({
+          name,
+          path,
+          metadata,
+          children,
+          ...(grant ? { grant } : {}),
+        });
+      }
+
+      const rootAfter = await this.assertDirectory(this.root);
+      if (!sameNode(rootMetadata, rootAfter))
+        throw unhealthy("Approval root identity changed");
+      return {
+        rootMetadata,
+        rootEntries,
+        ...(header ? { header } : {}),
+        headerStages,
+        grantStages,
+        slots,
+        buffers,
+      };
+    } catch (error) {
+      for (const buffer of buffers) zeroBuffer(buffer);
+      throw error;
+    }
+  }
+
+  private async scanRemediationSlot(
+    slotName: string,
+    buffers: Buffer[],
+  ): Promise<RemediationSlot> {
+    const path = join(this.root, slotName);
+    const metadata = await this.assertDirectory(path);
+    const children = sortedUniqueDirectoryEntries(
+      await this.filesystem.readdir(path),
+      PHASE3_APPROVAL_LIMITS.slotScanEntries,
+      "Approval slot topology is unsafe",
+    );
+    if (!children.includes("grant.json"))
+      throw unhealthy("Approval slot grant is missing");
+    for (const name of children)
+      if (
+        name !== "grant.json" &&
+        name !== "used.json" &&
+        !usedStagePattern.test(name)
+      )
+        throw unhealthy("Approval slot contains an unknown artifact");
+
+    const grantStable = await this.readStableFile(
+      join(path, "grant.json"),
+      PHASE3_APPROVAL_LIMITS.grantBytes,
+      false,
+      true,
+    );
+    buffers.push(grantStable.bytes);
+    const grantEnvelope = this.parseGrant(grantStable.bytes);
+    const grant: RemediationFinal = {
+      name: "grant.json",
+      path: join(path, "grant.json"),
+      metadata: grantStable.metadata,
+      bytes: grantStable.bytes,
+    };
+
+    let receipt: RemediationFinal | undefined;
+    if (children.includes("used.json")) {
+      const stable = await this.readStableFile(
+        join(path, "used.json"),
+        PHASE3_APPROVAL_LIMITS.receiptBytes,
+        true,
+        true,
+      );
+      buffers.push(stable.bytes);
+      this.parseReceipt(stable.bytes, grantEnvelope);
+      receipt = {
+        name: "used.json",
+        path: join(path, "used.json"),
+        metadata: stable.metadata,
+        bytes: stable.bytes,
+      };
+    }
+
+    const receiptStages: RemediationFile[] = [];
+    for (const name of children.filter((entry) =>
+      usedStagePattern.test(entry),
+    )) {
+      const stage = await this.readRemediationStage(
+        path,
+        name,
+        PHASE3_APPROVAL_LIMITS.receiptBytes,
+        buffers,
+      );
+      this.authenticatePotentialStage(stage.bytes, (bytes) => {
+        this.parseReceipt(bytes, grantEnvelope);
+      });
+      receiptStages.push(stage);
+    }
+    validateRemediationAliasTopology(
+      receipt,
+      receiptStages,
+      "Approval receipt link topology is unsafe",
+    );
+    const after = await this.assertDirectory(path);
+    if (!sameNode(metadata, after))
+      throw unhealthy("Approval slot identity changed");
+    return {
+      name: slotName,
+      path,
+      metadata,
+      children,
+      grant,
+      grantEnvelope,
+      ...(receipt ? { receipt } : {}),
+      receiptStages,
+    };
+  }
+
+  private async readRemediationStage(
+    parent: string,
+    name: string,
+    limit: number,
+    buffers: Buffer[],
+    allowLinked = true,
+  ): Promise<RemediationFile> {
+    const path = join(parent, name);
+    const stable = await this.readStableFile(path, limit, allowLinked, true);
+    buffers.push(stable.bytes);
+    return { name, path, metadata: stable.metadata, bytes: stable.bytes };
+  }
+
+  private authenticatePotentialStage(
+    bytes: Buffer,
+    authenticate: (bytes: Buffer) => void,
+  ): void {
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw unhealthy("Approval stage encoding is unsafe");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      throw unhealthy("Approval stage content is unsafe");
+    authenticate(bytes);
+  }
+
+  private async removeRemediationFile(
+    stage: RemediationFile,
+    parentPath: string,
+    parentMetadata: ApprovalMetadata,
+    parentEntries: readonly string[],
+    linkedFinal:
+      | {
+          readonly final: RemediationFinal;
+          readonly authenticate: (bytes: Buffer) => void;
+          readonly limit: number;
+        }
+      | undefined,
+  ): Promise<ApprovalMetadata> {
+    await this.proveRemediationParent(
+      parentPath,
+      parentMetadata,
+      parentEntries,
+    );
+    await this.assertExactFile(stage.path, stage.metadata, stage.bytes, true);
+    await this.removeExactRemediationFile(stage);
+    await this.durability.syncDirectory(parentPath);
+    const remainingEntries = withoutEntry(parentEntries, stage.name);
+    const refreshed = await this.refreshRemediationParent(
+      parentPath,
+      parentMetadata,
+      remainingEntries,
+    );
+    if (stage.metadata.nlink === 2n) {
+      if (
+        !linkedFinal ||
+        linkedFinal.final.metadata.nlink !== 2n ||
+        !sameInode(stage.metadata, linkedFinal.final.metadata)
+      )
+        throw unhealthy("Approval linked stage topology changed");
+      const stable = await this.readStableFile(
+        linkedFinal.final.path,
+        linkedFinal.limit,
+        true,
+        true,
+      );
+      try {
+        linkedFinal.authenticate(stable.bytes);
+        if (
+          stable.metadata.nlink !== 1n ||
+          !sameImmutableNode(linkedFinal.final.metadata, stable.metadata) ||
+          linkedFinal.final.metadata.size !== stable.metadata.size ||
+          Buffer.compare(linkedFinal.final.bytes, stable.bytes) !== 0
+        )
+          throw unhealthy("Approval linked final changed during remediation");
+        linkedFinal.final.metadata = stable.metadata;
+      } finally {
+        zeroBuffer(stable.bytes);
+      }
+    }
+    return refreshed;
+  }
+
+  private async removeRemediationGrantStage(
+    stage: RemediationGrantStage,
+    rootMetadata: ApprovalMetadata,
+    rootEntries: readonly string[],
+  ): Promise<ApprovalMetadata> {
+    await this.proveRemediationParent(this.root, rootMetadata, rootEntries);
+    const stageHandle = await this.filesystem.open(
+      stage.path,
+      constants.O_RDONLY |
+        (constants.O_DIRECTORY ?? 0) |
+        (constants.O_NOFOLLOW ?? 0),
+    );
+    try {
+      const opened = await stageHandle.stat({ bigint: true });
+      if (!sameNode(stage.metadata, opened))
+        throw unhealthy("Approval grant stage identity changed");
+      let stageMetadata = await this.proveRemediationParent(
+        stage.path,
+        stage.metadata,
+        stage.children,
+        true,
+      );
+      let stageEntries = [...stage.children];
+      if (stage.grant) {
+        await this.assertExactFile(
+          stage.grant.path,
+          stage.grant.metadata,
+          stage.grant.bytes,
+          true,
+        );
+        await this.removeExactRemediationFile(stage.grant);
+        await this.durability.syncDirectory(stage.path);
+        stageEntries = [];
+        stageMetadata = await this.refreshRemediationParent(
+          stage.path,
+          stageMetadata,
+          stageEntries,
+        );
+      }
+      const held = await stageHandle.stat({ bigint: true });
+      if (!sameImmutableNode(stageMetadata, held))
+        throw unhealthy("Approval grant stage identity changed");
+      await this.proveRemediationParent(
+        stage.path,
+        stageMetadata,
+        stageEntries,
+      );
+      await this.removeExactRemediationDirectory(
+        stage.path,
+        stageMetadata,
+        stageEntries,
+      );
+      await this.durability.syncDirectory(this.root);
+      return await this.refreshRemediationParent(
+        this.root,
+        rootMetadata,
+        withoutEntry(rootEntries, stage.name),
+      );
+    } finally {
+      await stageHandle.close();
+    }
+  }
+
+  private async removeExactRemediationFile(
+    stage: RemediationFile,
+  ): Promise<void> {
+    let failure: unknown;
+    try {
+      await this.filesystem.rm(stage.path, { force: false });
+    } catch (error) {
+      failure = error;
+    }
+    const observation = await this.observeRemediationFile(stage);
+    if (observation === "absent") return;
+    if (observation === "unchanged" && failure) throw failure;
+    if (observation === "unchanged")
+      throw unhealthy("Approval stage removal had no effect");
+    throw unhealthy("Approval stage changed during removal");
+  }
+
+  private async observeRemediationFile(
+    stage: RemediationFile,
+  ): Promise<"absent" | "unchanged" | "changed"> {
+    let stable: StableFile;
+    try {
+      stable = await this.readStableFile(
+        stage.path,
+        stage.bytes.byteLength,
+        stage.metadata.nlink === 2n,
+        true,
+      );
+    } catch (error) {
+      if (errno(error) === "ENOENT") return "absent";
+      throw error;
+    }
+    try {
+      return sameNode(stage.metadata, stable.metadata) &&
+        Buffer.compare(stage.bytes, stable.bytes) === 0
+        ? "unchanged"
+        : "changed";
+    } finally {
+      zeroBuffer(stable.bytes);
+    }
+  }
+
+  private async removeExactRemediationDirectory(
+    path: string,
+    metadata: ApprovalMetadata,
+    entries: readonly string[],
+  ): Promise<void> {
+    let failure: unknown;
+    try {
+      await this.filesystem.rmdir(path);
+    } catch (error) {
+      failure = error;
+    }
+    const observation = await this.observeRemediationDirectory(
+      path,
+      metadata,
+      entries,
+    );
+    if (observation === "absent") return;
+    if (observation === "unchanged" && failure) throw failure;
+    if (observation === "unchanged")
+      throw unhealthy("Approval grant stage removal had no effect");
+    throw unhealthy("Approval grant stage changed during removal");
+  }
+
+  private async observeRemediationDirectory(
+    path: string,
+    metadata: ApprovalMetadata,
+    entries: readonly string[],
+  ): Promise<"absent" | "unchanged" | "changed"> {
+    let current: ApprovalMetadata;
+    try {
+      current = await this.assertDirectory(path);
+    } catch (error) {
+      if (errno(error) === "ENOENT") return "absent";
+      throw error;
+    }
+    const currentEntries = sortedUniqueDirectoryEntries(
+      await this.filesystem.readdir(path),
+      entries.length,
+      "Approval grant stage topology changed",
+    );
+    return sameNode(metadata, current) && equalStrings(entries, currentEntries)
+      ? "unchanged"
+      : "changed";
+  }
+
+  private async proveRemediationParent(
+    path: string,
+    metadata: ApprovalMetadata,
+    entries: readonly string[],
+    exactNode = false,
+  ): Promise<ApprovalMetadata> {
+    const before = await this.assertDirectory(path);
+    if (
+      !(exactNode
+        ? sameNode(metadata, before)
+        : sameImmutableNode(metadata, before))
+    )
+      throw unhealthy("Approval remediation parent identity changed");
+    const currentEntries = sortedUniqueDirectoryEntries(
+      await this.filesystem.readdir(path),
+      entries.length,
+      "Approval remediation parent topology changed",
+    );
+    if (!equalStrings(entries, currentEntries))
+      throw unhealthy("Approval remediation parent topology changed");
+    const after = await this.assertDirectory(path);
+    if (!sameImmutableNode(before, after))
+      throw unhealthy("Approval remediation parent identity changed");
+    return after;
+  }
+
+  private async refreshRemediationParent(
+    path: string,
+    previous: ApprovalMetadata,
+    entries: readonly string[],
+  ): Promise<ApprovalMetadata> {
+    const refreshed = await this.assertDirectory(path);
+    if (!sameImmutableNode(previous, refreshed))
+      throw unhealthy("Approval remediation parent identity changed");
+    const currentEntries = sortedUniqueDirectoryEntries(
+      await this.filesystem.readdir(path),
+      entries.length,
+      "Approval remediation parent topology changed",
+    );
+    if (!equalStrings(entries, currentEntries))
+      throw unhealthy("Approval remediation parent topology changed");
+    const after = await this.assertDirectory(path);
+    if (!sameImmutableNode(refreshed, after))
+      throw unhealthy("Approval remediation parent identity changed");
+    return after;
+  }
+
+  private assertFinalRemediationScan(
+    initial: RemediationScan,
+    final: RemediationScan,
+    rootMetadata: ApprovalMetadata,
+    rootEntries: readonly string[],
+  ): void {
+    if (
+      final.headerStages.length !== 0 ||
+      final.grantStages.length !== 0 ||
+      final.slots.some((slot) => slot.receiptStages.length !== 0) ||
+      !sameImmutableNode(rootMetadata, final.rootMetadata) ||
+      !equalStrings(rootEntries, final.rootEntries)
+    )
+      throw unhealthy("Approval remediation final topology is unsafe");
+    compareRemediationFinal(initial.header, final.header);
+    if (initial.slots.length !== final.slots.length)
+      throw unhealthy("Approval remediation final slot topology changed");
+    for (let index = 0; index < initial.slots.length; index += 1) {
+      const before = initial.slots[index];
+      const after = final.slots[index];
+      if (
+        !before ||
+        !after ||
+        before.name !== after.name ||
+        !sameImmutableNode(before.metadata, after.metadata)
+      )
+        throw unhealthy("Approval remediation final slot identity changed");
+      compareRemediationFinal(before.grant, after.grant);
+      compareRemediationFinal(before.receipt, after.receipt);
+    }
+  }
+
   private async refresh(): Promise<void> {
     try {
       const scanned = await this.scan();
@@ -1870,6 +2689,7 @@ export class DurablePhase3ApprovalGrants implements Phase3ApprovalPort {
     path: string,
     limit: number,
     allowLinked: boolean,
+    strictIdentity = false,
   ): Promise<StableFile> {
     const before = await this.assertFile(path, allowLinked);
     if (before.size > BigInt(limit))
@@ -1883,15 +2703,15 @@ export class DurablePhase3ApprovalGrants implements Phase3ApprovalPort {
     let failure: { error: unknown } | undefined;
     try {
       const opened = await handle.stat({ bigint: true });
-      if (!sameReadableFile(before, opened, allowLinked))
+      if (!sameReadableFile(before, opened, allowLinked, strictIdentity))
         throw unhealthy("Approval artifact identity changed");
       bytes = await handle.readFile();
       const after = await handle.stat({ bigint: true });
       const linked = await this.filesystem.lstat(path, { bigint: true });
       if (
         bytes.byteLength > limit ||
-        !sameReadableFile(opened, after, allowLinked) ||
-        !sameReadableFile(opened, linked, allowLinked) ||
+        !sameReadableFile(opened, after, allowLinked, strictIdentity) ||
+        !sameReadableFile(opened, linked, allowLinked, strictIdentity) ||
         opened.size !== BigInt(bytes.byteLength)
       )
         throw unhealthy("Approval artifact changed during read");
@@ -1916,11 +2736,13 @@ export class DurablePhase3ApprovalGrants implements Phase3ApprovalPort {
     path: string,
     expectedMetadata: ApprovalMetadata,
     expectedBytes: Buffer,
+    strictIdentity = false,
   ): Promise<void> {
     const stable = await this.readStableFile(
       path,
       expectedBytes.byteLength,
       expectedMetadata.nlink === 2n,
+      strictIdentity,
     );
     try {
       if (
@@ -2186,8 +3008,9 @@ function sameReadableFile(
   left: ApprovalMetadata,
   right: ApprovalMetadata,
   allowLinked: boolean,
+  strictIdentity = false,
 ): boolean {
-  return (
+  const readable =
     sameInode(left, right) &&
     left.mode === right.mode &&
     left.uid === right.uid &&
@@ -2197,8 +3020,8 @@ function sameReadableFile(
     (allowLinked
       ? (left.nlink === 1n || left.nlink === 2n) &&
         (right.nlink === 1n || right.nlink === 2n)
-      : left.nlink === 1n && right.nlink === 1n)
-  );
+      : left.nlink === 1n && right.nlink === 1n);
+  return readable && (!strictIdentity || sameNode(left, right));
 }
 
 function sameNode(left: ApprovalMetadata, right: ApprovalMetadata): boolean {
@@ -2212,6 +3035,101 @@ function sameNode(left: ApprovalMetadata, right: ApprovalMetadata): boolean {
     left.mtimeNs === right.mtimeNs &&
     left.ctimeNs === right.ctimeNs
   );
+}
+
+function sameImmutableNode(
+  left: ApprovalMetadata,
+  right: ApprovalMetadata,
+): boolean {
+  return (
+    sameInode(left, right) &&
+    left.mode === right.mode &&
+    left.uid === right.uid &&
+    left.gid === right.gid &&
+    left.isFile === right.isFile &&
+    left.isDirectory === right.isDirectory
+  );
+}
+
+function sortedUniqueDirectoryEntries(
+  entries: readonly string[],
+  limit: number,
+  message: string,
+): string[] {
+  if (entries.length > limit) throw unhealthy(message);
+  const sorted = [...entries].sort();
+  for (let index = 1; index < sorted.length; index += 1)
+    if (sorted[index - 1] === sorted[index]) throw unhealthy(message);
+  return sorted;
+}
+
+function equalStrings(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+function withoutEntry(entries: readonly string[], removed: string): string[] {
+  const result = entries.filter((entry) => entry !== removed);
+  if (result.length !== entries.length - 1)
+    throw unhealthy("Approval remediation topology changed");
+  return result;
+}
+
+function validateRemediationAliasTopology(
+  final: RemediationFinal | undefined,
+  stages: readonly RemediationFile[],
+  message: string,
+): void {
+  for (const stage of stages) {
+    const aliasesFinal = final
+      ? sameInode(stage.metadata, final.metadata)
+      : false;
+    if (stage.metadata.nlink === 1n) {
+      if (aliasesFinal) throw unhealthy(message);
+      continue;
+    }
+    if (
+      stage.metadata.nlink !== 2n ||
+      !final ||
+      final.metadata.nlink !== 2n ||
+      !aliasesFinal ||
+      !sameImmutableNode(stage.metadata, final.metadata) ||
+      Buffer.compare(stage.bytes, final.bytes) !== 0
+    )
+      throw unhealthy(message);
+  }
+  if (final?.metadata.nlink === 2n) {
+    const aliases = stages.filter((stage) =>
+      sameInode(stage.metadata, final.metadata),
+    );
+    if (aliases.length !== 1 || aliases[0]?.metadata.nlink !== 2n)
+      throw unhealthy(message);
+  }
+}
+
+function compareRemediationFinal(
+  expected: RemediationFinal | undefined,
+  actual: RemediationFinal | undefined,
+): void {
+  if (!expected && !actual) return;
+  if (
+    !expected ||
+    !actual ||
+    expected.name !== actual.name ||
+    !sameNode(expected.metadata, actual.metadata) ||
+    Buffer.compare(expected.bytes, actual.bytes) !== 0
+  )
+    throw unhealthy("Approval final artifact changed during remediation");
+}
+
+function zeroRemediationScan(scan: RemediationScan | undefined): void {
+  if (!scan) return;
+  for (const buffer of scan.buffers) zeroBuffer(buffer);
 }
 
 function privateOwner(metadata: ApprovalMetadata): boolean {
