@@ -1,6 +1,24 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ModuleKind, ScriptTarget, transpileModule } from "typescript";
+import {
+  ModuleKind,
+  ScriptTarget,
+  SyntaxKind,
+  createSourceFile,
+  forEachChild,
+  isCallExpression,
+  isExportDeclaration,
+  isExternalModuleReference,
+  isIdentifier,
+  isImportDeclaration,
+  isImportEqualsDeclaration,
+  isPropertyAccessExpression,
+  isStringLiteralLike,
+  transpileModule,
+  type Expression,
+  type Node,
+} from "typescript";
 import { ReadTools } from "../src/application.js";
 import { phase2ToolNames } from "../src/phase2Contracts.js";
 import { phase3Contract } from "../src/phase3/contracts.js";
@@ -10,6 +28,7 @@ const phase3Files = [
   "approval.ts",
   "durableApproval.ts",
   "approvalCustody.ts",
+  "approvalKey.ts",
   "resourceLocks.ts",
   "applyCoordinator.ts",
   "proposalAdapter.ts",
@@ -24,7 +43,7 @@ const phase3Files = [
 
 const phase3NativeFiles = ["openat2-replace.c", "approval-custody.c"] as const;
 
-describe("Phase 3A through Phase 3O isolation", () => {
+describe("Phase 3A through Phase 3P isolation", () => {
   it("does not register tools or enable writes", () => {
     const phase1Names = ReadTools.prototype.names.call({});
     expect(phase1Names.some((name) => name.includes("phase3"))).toBe(false);
@@ -34,9 +53,11 @@ describe("Phase 3A through Phase 3O isolation", () => {
     expect(phase3Contract.liveAdapters).toBe("absent");
   });
 
-  it("keeps the Phase 3B through Phase 3O adapters out of runtime composition", () => {
+  it("keeps the Phase 3B through Phase 3P adapters out of runtime composition", () => {
     for (const path of [
       "src/index.ts",
+      "src/application.ts",
+      "src/bridge.ts",
       "src/phase2Activation.ts",
       "src/toolRegistry.ts",
       "src/cli.ts",
@@ -47,6 +68,8 @@ describe("Phase 3A through Phase 3O isolation", () => {
       "addon/config.yaml",
       "addon/app/package.json",
       "addon/app/src/index.ts",
+      "addon/app/src/application.ts",
+      "addon/app/src/bridge.ts",
       "addon/app/src/phase2Activation.ts",
       "addon/app/src/toolRegistry.ts",
       "addon/app/src/cli.ts",
@@ -70,7 +93,66 @@ describe("Phase 3A through Phase 3O isolation", () => {
       expect(source).not.toContain("durableApproval");
       expect(source).not.toContain("approvalCustody");
       expect(source).not.toContain("approval-custody");
+      expect(source).not.toContain("approvalKey");
+      expect(source).not.toContain("phase3/approvalKey");
+      expect(source).not.toContain("provisionPhase3ApprovalKey");
+      expect(source).not.toContain("loadPhase3ApprovalKey");
     }
+  });
+
+  it("keeps the Phase 3P approval key on an inert test-only import boundary", () => {
+    const source = readFileSync("src/phase3/approvalKey.ts", "utf8");
+    const imports = moduleSpecifiers(
+      "src/phase3/approvalKey.ts",
+      source,
+    ).sort();
+    expect(imports).toEqual([
+      "node:crypto",
+      "node:fs",
+      "node:fs/promises",
+      "node:path",
+    ]);
+    for (const forbidden of [
+      "./durableApproval",
+      "../ha/",
+      "phase3Contract",
+      "toolRegistry",
+      "application",
+      "fetch(",
+      "axios",
+      "mkdir",
+      "unlink",
+      "rename",
+    ])
+      expect(source).not.toContain(forbidden);
+
+    const importers = [
+      ...typescriptFiles("src"),
+      ...typescriptFiles("addon/app/src"),
+      ...typescriptFiles("tests"),
+    ]
+      .flatMap((path) =>
+        moduleSpecifiers(path, readFileSync(path, "utf8"))
+          .filter(isApprovalKeySpecifier)
+          .map(() => path),
+      )
+      .sort();
+    expect(importers).toEqual(["tests/phase3ApprovalKey.test.ts"]);
+
+    const guardedForms = [
+      `import "../src/phase3/approvalKey.js";`,
+      `export * from "../src/phase3/approvalKey.js";`,
+      `void import("../src/phase3/approvalKey.js");`,
+      `require("../src/phase3/approvalKey.js");`,
+      `module.require("../src/phase3/approvalKey.js");`,
+      `require.resolve("../src/phase3/approvalKey.js");`,
+      `import key = require("../src/phase3/approvalKey.js");`,
+    ].join("\n");
+    expect(
+      moduleSpecifiers("approval-key-isolation-fixture.ts", guardedForms)
+        .filter(isApprovalKeySpecifier)
+        .sort(),
+    ).toEqual(Array.from({ length: 7 }, () => "../src/phase3/approvalKey.js"));
   });
 
   it("keeps the Phase 3N approval source on an inert narrow import boundary", () => {
@@ -127,7 +209,7 @@ describe("Phase 3A through Phase 3O isolation", () => {
       expect(source).not.toContain(forbidden);
   });
 
-  it("keeps root and add-on Phase 3A through Phase 3O source mirrors exact", () => {
+  it("keeps root and add-on Phase 3A through Phase 3P source mirrors exact", () => {
     for (const file of phase3Files) {
       const root = readFileSync(`src/phase3/${file}`, "utf8");
       const addon = readFileSync(`addon/app/src/phase3/${file}`, "utf8");
@@ -241,3 +323,68 @@ describe("Phase 3A through Phase 3O isolation", () => {
       expect(source.toLowerCase()).not.toContain(forbidden);
   });
 });
+
+function typescriptFiles(root: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name).replaceAll("\\", "/");
+    if (entry.isDirectory()) files.push(...typescriptFiles(path));
+    else if (
+      entry.isFile() &&
+      [".ts", ".tsx", ".mts", ".cts"].some((suffix) => path.endsWith(suffix))
+    )
+      files.push(path);
+  }
+  return files;
+}
+
+function moduleSpecifiers(path: string, source: string): string[] {
+  const parsed = createSourceFile(path, source, ScriptTarget.Latest, true);
+  const specifiers: string[] = [];
+  const visit = (node: Node): void => {
+    if (
+      (isImportDeclaration(node) || isExportDeclaration(node)) &&
+      node.moduleSpecifier !== undefined &&
+      isStringLiteralLike(node.moduleSpecifier)
+    )
+      specifiers.push(node.moduleSpecifier.text);
+    else if (
+      isImportEqualsDeclaration(node) &&
+      isExternalModuleReference(node.moduleReference) &&
+      node.moduleReference.expression !== undefined &&
+      isStringLiteralLike(node.moduleReference.expression)
+    )
+      specifiers.push(node.moduleReference.expression.text);
+    else if (
+      isCallExpression(node) &&
+      isModuleLoader(node.expression) &&
+      node.arguments[0] !== undefined &&
+      isStringLiteralLike(node.arguments[0])
+    )
+      specifiers.push(node.arguments[0].text);
+    forEachChild(node, visit);
+  };
+  visit(parsed);
+  return specifiers;
+}
+
+function isModuleLoader(expression: Expression): boolean {
+  if (expression.kind === SyntaxKind.ImportKeyword) return true;
+  if (isIdentifier(expression)) return expression.text === "require";
+  if (!isPropertyAccessExpression(expression)) return false;
+  return (
+    (isIdentifier(expression.expression) &&
+      expression.expression.text === "module" &&
+      expression.name.text === "require") ||
+    (isIdentifier(expression.expression) &&
+      expression.expression.text === "require" &&
+      expression.name.text === "resolve")
+  );
+}
+
+function isApprovalKeySpecifier(specifier: string): boolean {
+  const normalized = specifier.replaceAll("\\", "/");
+  return (
+    normalized === "approvalKey.js" || normalized.endsWith("/approvalKey.js")
+  );
+}
