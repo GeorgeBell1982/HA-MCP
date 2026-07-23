@@ -113,6 +113,12 @@ export interface Phase3ApprovalKeyLease {
   readonly release: () => void;
 }
 
+export interface Phase3ApprovalKeySyncLease {
+  readonly key: Buffer;
+  readonly syncStatus: "file_and_parent_sync_completed";
+  readonly release: () => void;
+}
+
 interface TrustedHandle {
   read(
     buffer: Uint8Array,
@@ -407,6 +413,144 @@ export async function loadPhase3ApprovalKey(
     wipeBytes(key, PHASE3_APPROVAL_KEY_BYTES);
   };
   return Object.freeze({ key, release });
+}
+
+export async function synchronizeExistingPhase3ApprovalKey(
+  options: Phase3ApprovalKeyOptions = {},
+): Promise<Phase3ApprovalKeySyncLease> {
+  const context = configure(options);
+  let directory: TrustedHandle | undefined;
+  let keyHandle: TrustedHandle | undefined;
+  let pinnedDirectory: Phase3ApprovalKeyMetadata | undefined;
+  let candidate: Buffer | undefined;
+  let verification: Buffer | undefined;
+  let primary: Phase3ApprovalKeyErrorCode | undefined;
+  let directoryReadyForClose = false;
+
+  try {
+    pinnedDirectory = await filesystemLstat(context, context.stateDirectory);
+    assertDirectory(pinnedDirectory, context.uid);
+    try {
+      directory = await filesystemOpen(
+        context,
+        context.stateDirectory,
+        context.flags.readonlyDirectory,
+      );
+    } catch (error) {
+      throw laterKeyFailure(error);
+    }
+    let openedDirectory: Phase3ApprovalKeyMetadata;
+    try {
+      openedDirectory = await directory.stat();
+    } catch (error) {
+      throw laterKeyFailure(error);
+    }
+    assertDirectory(openedDirectory, context.uid);
+    assertSameDirectory(pinnedDirectory, openedDirectory);
+    await revalidateSynchronizedDirectory(context, directory, pinnedDirectory);
+
+    let pathKey: Phase3ApprovalKeyMetadata;
+    try {
+      pathKey = await filesystemLstat(context, context.keyPath);
+    } catch (error) {
+      if (error instanceof BoundaryFailure && error.errno === "ENOENT")
+        throw keyError("approval_key_missing");
+      throw error;
+    }
+    assertKey(pathKey, context.uid);
+
+    try {
+      keyHandle = await filesystemOpen(
+        context,
+        context.keyPath,
+        context.flags.readonlyKey,
+      );
+    } catch (error) {
+      throw laterKeyFailure(error);
+    }
+    let descriptorKey: Phase3ApprovalKeyMetadata;
+    try {
+      descriptorKey = await keyHandle.stat();
+    } catch (error) {
+      throw laterKeyFailure(error);
+    }
+    assertSameKey(pathKey, descriptorKey);
+    assertKey(descriptorKey, context.uid);
+
+    candidate = Buffer.alloc(PHASE3_APPROVAL_KEY_BYTES);
+    await readExact(keyHandle, candidate);
+    if (isAllZero(candidate, PHASE3_APPROVAL_KEY_BYTES))
+      throw keyError("approval_key_corrupt");
+
+    await revalidateSynchronizedKey(context, keyHandle, descriptorKey);
+    await revalidateSynchronizedDirectory(context, directory, pinnedDirectory);
+
+    await keyHandle.sync();
+
+    await revalidateSynchronizedKey(context, keyHandle, descriptorKey);
+    await revalidateSynchronizedDirectory(context, directory, pinnedDirectory);
+
+    await directory.sync();
+
+    verification = Buffer.alloc(PHASE3_APPROVAL_KEY_BYTES);
+    await readExact(keyHandle, verification);
+    if (isAllZero(verification, PHASE3_APPROVAL_KEY_BYTES))
+      throw keyError("approval_key_corrupt");
+    if (!fixedBytesEqual(candidate, verification))
+      throw keyError("approval_key_unsafe");
+
+    await revalidateSynchronizedKey(context, keyHandle, descriptorKey);
+    await revalidateSynchronizedDirectory(context, directory, pinnedDirectory);
+    directoryReadyForClose = true;
+  } catch (error) {
+    primary = publicCode(error);
+  } finally {
+    if (keyHandle !== undefined) {
+      const handle = keyHandle;
+      const cleanup = await cleanupCall(async () => {
+        await handle.close();
+      });
+      primary ??= cleanup;
+      keyHandle = undefined;
+    }
+    if (
+      directory !== undefined &&
+      pinnedDirectory !== undefined &&
+      !directoryReadyForClose
+    ) {
+      const handle = directory;
+      const pinned = pinnedDirectory;
+      const cleanup = await cleanupCall(async () => {
+        await revalidateSynchronizedDirectory(context, handle, pinned);
+      });
+      primary ??= cleanup;
+    }
+    if (directory !== undefined) {
+      const handle = directory;
+      const cleanup = await cleanupCall(async () => {
+        await handle.close();
+      });
+      primary ??= cleanup;
+      directory = undefined;
+    }
+    zero(verification);
+  }
+
+  if (primary !== undefined) {
+    zero(candidate);
+    throw keyError(primary);
+  }
+  if (candidate === undefined) throw keyError("approval_key_io_failure");
+
+  const key = candidate;
+  const release = (): void => {
+    wipeBytes(key, PHASE3_APPROVAL_KEY_BYTES);
+  };
+  return Object.freeze({
+    key,
+    syncStatus: "file_and_parent_sync_completed" as const,
+    release,
+  });
 }
 
 function configure(options: Phase3ApprovalKeyOptions): ApprovalKeyContext {
@@ -723,6 +867,54 @@ async function revalidateDirectory(
   assertSameDirectory(descriptor, path);
 }
 
+async function revalidateSynchronizedDirectory(
+  context: ApprovalKeyContext,
+  handle: TrustedHandle,
+  pinned: Phase3ApprovalKeyMetadata,
+): Promise<void> {
+  let descriptor: Phase3ApprovalKeyMetadata;
+  try {
+    descriptor = await handle.stat();
+  } catch (error) {
+    throw laterKeyFailure(error);
+  }
+  assertDirectory(descriptor, context.uid);
+  assertSameDirectory(pinned, descriptor);
+  let path: Phase3ApprovalKeyMetadata;
+  try {
+    path = await filesystemLstat(context, context.stateDirectory);
+  } catch (error) {
+    throw laterKeyFailure(error);
+  }
+  assertDirectory(path, context.uid);
+  assertSameDirectory(pinned, path);
+  assertSameDirectory(descriptor, path);
+}
+
+async function revalidateSynchronizedKey(
+  context: ApprovalKeyContext,
+  handle: TrustedHandle,
+  pinned: Phase3ApprovalKeyMetadata,
+): Promise<void> {
+  let descriptor: Phase3ApprovalKeyMetadata;
+  try {
+    descriptor = await handle.stat();
+  } catch (error) {
+    throw laterKeyFailure(error);
+  }
+  assertSameKey(pinned, descriptor);
+  assertKey(descriptor, context.uid);
+  let path: Phase3ApprovalKeyMetadata;
+  try {
+    path = await filesystemLstat(context, context.keyPath);
+  } catch (error) {
+    throw laterKeyFailure(error);
+  }
+  assertSameKey(pinned, path);
+  assertKey(path, context.uid);
+  assertSameKey(descriptor, path);
+}
+
 function assertDirectory(
   metadata: Phase3ApprovalKeyMetadata,
   uid: bigint,
@@ -843,6 +1035,13 @@ function isAllZero(bytes: Uint8Array, byteLength: number): boolean {
   for (let index = 0; index < byteLength; index += 1)
     aggregate |= bytes[index] ?? 0;
   return aggregate === 0;
+}
+
+function fixedBytesEqual(first: Uint8Array, second: Uint8Array): boolean {
+  let difference = 0;
+  for (let index = 0; index < PHASE3_APPROVAL_KEY_BYTES; index += 1)
+    difference |= (first[index] ?? 0) ^ (second[index] ?? 0);
+  return difference === 0;
 }
 
 function zero(bytes: Buffer | undefined): void {

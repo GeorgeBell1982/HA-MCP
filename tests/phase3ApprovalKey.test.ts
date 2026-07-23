@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   symlink,
   writeFile,
@@ -18,6 +19,7 @@ import {
   loadPhase3ApprovalKey,
   phase3ApprovalKeyErrorCodes,
   provisionPhase3ApprovalKey,
+  synchronizeExistingPhase3ApprovalKey,
   type Phase3ApprovalKeyErrorCode,
   type Phase3ApprovalKeyFileHandle,
   type Phase3ApprovalKeyFilesystem,
@@ -55,7 +57,7 @@ const fixedMessages: Readonly<Record<Phase3ApprovalKeyErrorCode, string>> =
     approval_key_io_failure: "Phase 3 approval key I/O failed",
   });
 
-describe("Phase 3P approval key contract", () => {
+describe("Phase 3P through Phase 3Q approval key contract", () => {
   it("exports one closed fixed-message error without a cause", () => {
     expect(phase3ApprovalKeyErrorCodes).toEqual([
       "approval_key_invalid",
@@ -781,6 +783,539 @@ describe("Phase 3P approval key contract", () => {
     );
     expect(filesystem.key?.bytes).toEqual(KEY_BYTES);
   });
+
+  it("synchronizes with the exact read-only sequence, no writes, and an exact frozen lease", async () => {
+    const filesystem = new FakeFilesystem(KEY_BYTES);
+    const lease = await synchronizeExistingPhase3ApprovalKey(
+      fakeOptions(filesystem),
+    );
+    const reference = lease.key;
+    const candidateTarget = filesystem.readTargets[0]!;
+    const verificationTarget = filesystem.readTargets[2]!;
+
+    expect(filesystem.opens).toEqual([
+      {
+        path: STATE_DIRECTORY,
+        flags: FLAGS.O_RDONLY | FLAGS.O_DIRECTORY | FLAGS.O_NOFOLLOW,
+        mode: undefined,
+      },
+      {
+        path: KEY_PATH,
+        flags: FLAGS.O_RDONLY | FLAGS.O_NOFOLLOW,
+        mode: undefined,
+      },
+    ]);
+    expect(filesystem.events).toEqual([
+      "directory.lstat:1",
+      "directory.open:1",
+      "directory.stat:1",
+      "directory.stat:2",
+      "directory.lstat:2",
+      "key.lstat:1",
+      "key.open.read:1",
+      "key.stat:1",
+      "key.read:1",
+      "key.read:2",
+      "key.stat:2",
+      "key.lstat:2",
+      "directory.stat:3",
+      "directory.lstat:3",
+      "key.sync:1",
+      "key.stat:3",
+      "key.lstat:3",
+      "directory.stat:4",
+      "directory.lstat:4",
+      "directory.sync:1",
+      "key.read:3",
+      "key.read:4",
+      "key.stat:4",
+      "key.lstat:4",
+      "directory.stat:5",
+      "directory.lstat:5",
+      "key.close:1",
+      "directory.close:1",
+    ]);
+    expect(filesystem.events.some((event) => event.includes(".write"))).toBe(
+      false,
+    );
+    const source = await readFile("src/phase3/approvalKey.ts", "utf8");
+    const synchronizationSource = source.slice(
+      source.indexOf(
+        "export async function synchronizeExistingPhase3ApprovalKey",
+      ),
+      source.indexOf("\nfunction configure", source.indexOf("synchronize")),
+    );
+    expect(synchronizationSource).toContain("context.flags.readonlyKey");
+    expect(synchronizationSource).not.toContain("writeExact");
+
+    expect(Reflect.ownKeys(lease)).toEqual(["key", "syncStatus", "release"]);
+    expect(Object.isFrozen(lease)).toBe(true);
+    expect(lease.syncStatus).toBe("file_and_parent_sync_completed");
+    expect(reference).toBe(candidateTarget);
+    expect(verificationTarget).not.toBe(candidateTarget);
+    expect(
+      filesystem.readTargets.filter(
+        (target) =>
+          intrinsicTestByteLength(target) === PHASE3_APPROVAL_KEY_BYTES,
+      ),
+    ).toEqual([candidateTarget, verificationTarget]);
+    expect(
+      filesystem.readTargets.filter((target) => target === candidateTarget),
+    ).toHaveLength(1);
+    expectIndexedZero(verificationTarget, PHASE3_APPROVAL_KEY_BYTES);
+    expect(reference).toEqual(KEY_BYTES);
+    for (let index = 0; index < PHASE3_APPROVAL_KEY_BYTES; index += 1)
+      reference[index] = 0x6d;
+    Object.defineProperty(reference, "byteLength", { value: 0 });
+    Object.defineProperty(reference, "length", { value: 0 });
+    Object.defineProperty(reference, "fill", {
+      value: () => {
+        throw new Error("caller fill canary");
+      },
+      configurable: true,
+    });
+    Object.setPrototypeOf(reference, null);
+    expect(lease.release()).toBeUndefined();
+    expectIndexedZero(reference, PHASE3_APPROVAL_KEY_BYTES);
+    for (let index = 0; index < PHASE3_APPROVAL_KEY_BYTES; index += 1)
+      reference[index] = 0x6e;
+    expect(lease.release()).toBeUndefined();
+    expectIndexedZero(reference, PHASE3_APPROVAL_KEY_BYTES);
+    expect(lease.syncStatus).toBe("file_and_parent_sync_completed");
+  });
+
+  it("supports fresh repeated and concurrent synchronizers without lifecycle state", async () => {
+    const filesystem = new FakeFilesystem(KEY_BYTES);
+    const first = await synchronizeExistingPhase3ApprovalKey(
+      fakeOptions(filesystem),
+    );
+    const second = await synchronizeExistingPhase3ApprovalKey(
+      fakeOptions(filesystem),
+    );
+    const concurrent = await Promise.all([
+      synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+      synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+      synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+    ]);
+
+    expect(first.key).toEqual(KEY_BYTES);
+    expect(second.key).toEqual(KEY_BYTES);
+    expect(concurrent.map((lease) => lease.syncStatus)).toEqual([
+      "file_and_parent_sync_completed",
+      "file_and_parent_sync_completed",
+      "file_and_parent_sync_completed",
+    ]);
+    expect(filesystem.events.some((event) => event.includes(".write"))).toBe(
+      false,
+    );
+    first.release();
+    second.release();
+    for (const lease of concurrent) lease.release();
+  });
+
+  it("keeps missing, unsafe metadata, corrupt size/content, and later disappearance classifications closed", async () => {
+    await expectCode(
+      synchronizeExistingPhase3ApprovalKey(fakeOptions(new FakeFilesystem())),
+      "approval_key_missing",
+    );
+
+    for (const metadata of [
+      keyMetadata({ kind: "other" }),
+      keyMetadata({ uid: BigInt(UID + 1) }),
+      keyMetadata({ mode: 0o100640n }),
+      keyMetadata({ nlink: 2n }),
+    ]) {
+      const filesystem = new FakeFilesystem(KEY_BYTES);
+      filesystem.key!.metadata = metadata;
+      await expectCode(
+        synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+        "approval_key_unsafe",
+      );
+    }
+
+    for (const size of [31n, 33n]) {
+      const filesystem = new FakeFilesystem(KEY_BYTES);
+      filesystem.key!.metadata = keyMetadata({ size });
+      await expectCode(
+        synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+        "approval_key_corrupt",
+      );
+    }
+
+    const zero = new FakeFilesystem(Buffer.alloc(PHASE3_APPROVAL_KEY_BYTES));
+    await expectCode(
+      synchronizeExistingPhase3ApprovalKey(fakeOptions(zero)),
+      "approval_key_corrupt",
+    );
+
+    const trailing = new FakeFilesystem(Buffer.alloc(33, 0x5a));
+    trailing.key!.metadata = keyMetadata();
+    await expectCode(
+      synchronizeExistingPhase3ApprovalKey(fakeOptions(trailing)),
+      "approval_key_corrupt",
+    );
+
+    for (const event of [
+      "directory.open:1",
+      "directory.stat:1",
+      "directory.lstat:2",
+      "key.open.read:1",
+      "key.stat:1",
+      "key.lstat:2",
+    ]) {
+      const filesystem = new FakeFilesystem(KEY_BYTES);
+      filesystem.failures.set(event, errno("ENOENT"));
+      await expectCode(
+        synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+        "approval_key_unsafe",
+      );
+    }
+  });
+
+  it("classifies first and second exact-read faults independently", async () => {
+    const cases: Array<{
+      readonly label: string;
+      readonly script: ReadScriptResult[];
+      readonly code: Phase3ApprovalKeyErrorCode;
+    }> = [
+      {
+        label: "first unexpected EOF",
+        script: [0],
+        code: "approval_key_corrupt",
+      },
+      {
+        label: "first overrun",
+        script: [PHASE3_APPROVAL_KEY_BYTES + 1],
+        code: "approval_key_io_failure",
+      },
+      {
+        label: "first malformed count",
+        script: [Number.NaN],
+        code: "approval_key_io_failure",
+      },
+      {
+        label: "first malformed result",
+        script: ["malformed"],
+        code: "approval_key_io_failure",
+      },
+      {
+        label: "first non-EINTR",
+        script: [errno("EIO")],
+        code: "approval_key_io_failure",
+      },
+      {
+        label: "first retry exhaustion",
+        script: Array.from({ length: PHASE3_APPROVAL_KEY_IO_ATTEMPTS }, () =>
+          errno("EINTR"),
+        ),
+        code: "approval_key_io_failure",
+      },
+      {
+        label: "first trailing byte",
+        script: [PHASE3_APPROVAL_KEY_BYTES, 1],
+        code: "approval_key_corrupt",
+      },
+      {
+        label: "second unexpected EOF",
+        script: [PHASE3_APPROVAL_KEY_BYTES, 0, 0],
+        code: "approval_key_corrupt",
+      },
+      {
+        label: "second overrun",
+        script: [PHASE3_APPROVAL_KEY_BYTES, 0, PHASE3_APPROVAL_KEY_BYTES + 1],
+        code: "approval_key_io_failure",
+      },
+      {
+        label: "second malformed count",
+        script: [PHASE3_APPROVAL_KEY_BYTES, 0, Number.NaN],
+        code: "approval_key_io_failure",
+      },
+      {
+        label: "second malformed result",
+        script: [PHASE3_APPROVAL_KEY_BYTES, 0, "malformed"],
+        code: "approval_key_io_failure",
+      },
+      {
+        label: "second non-EINTR",
+        script: [PHASE3_APPROVAL_KEY_BYTES, 0, errno("EIO")],
+        code: "approval_key_io_failure",
+      },
+      {
+        label: "second retry exhaustion",
+        script: [
+          PHASE3_APPROVAL_KEY_BYTES,
+          0,
+          ...Array.from({ length: PHASE3_APPROVAL_KEY_IO_ATTEMPTS }, () =>
+            errno("EINTR"),
+          ),
+        ],
+        code: "approval_key_io_failure",
+      },
+      {
+        label: "second trailing byte",
+        script: [PHASE3_APPROVAL_KEY_BYTES, 0, PHASE3_APPROVAL_KEY_BYTES, 1],
+        code: "approval_key_corrupt",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const filesystem = new FakeFilesystem(KEY_BYTES);
+      filesystem.readScript.push(...testCase.script);
+      await expectCode(
+        synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+        testCase.code,
+      );
+      expect(
+        filesystem.events.some((event) => event.includes(".write")),
+        testCase.label,
+      ).toBe(false);
+      for (const target of new Set(filesystem.readTargets))
+        expectIndexedZero(target, intrinsicTestByteLength(target));
+    }
+
+    const shortAndInterrupted = new FakeFilesystem(KEY_BYTES);
+    shortAndInterrupted.readScript.push(
+      errno("EINTR"),
+      7,
+      25,
+      0,
+      errno("EINTR"),
+      11,
+      21,
+      0,
+    );
+    const lease = await synchronizeExistingPhase3ApprovalKey(
+      fakeOptions(shortAndInterrupted),
+    );
+    expect(lease.key).toEqual(KEY_BYTES);
+    lease.release();
+  });
+
+  it("rejects all-zero or differing second reads and wipes both read buffers", async () => {
+    const secondZero = new FakeFilesystem(KEY_BYTES);
+    secondZero.hooks.set("key.read:3", () => {
+      secondZero.key!.bytes = Buffer.alloc(PHASE3_APPROVAL_KEY_BYTES);
+    });
+    await expectCode(
+      synchronizeExistingPhase3ApprovalKey(fakeOptions(secondZero)),
+      "approval_key_corrupt",
+    );
+    for (const target of new Set(secondZero.readTargets))
+      expectIndexedZero(target, intrinsicTestByteLength(target));
+
+    const differing = new FakeFilesystem(KEY_BYTES);
+    differing.hooks.set("key.read:3", () => {
+      differing.key!.bytes = Buffer.alloc(PHASE3_APPROVAL_KEY_BYTES, 0x6b);
+    });
+    await expectCode(
+      synchronizeExistingPhase3ApprovalKey(fakeOptions(differing)),
+      "approval_key_unsafe",
+    );
+    for (const target of new Set(differing.readTargets))
+      expectIndexedZero(target, intrinsicTestByteLength(target));
+  });
+
+  it("rejects key, path, and parent drift at every synchronization checkpoint", async () => {
+    for (const event of ["key.stat:2", "key.stat:3", "key.stat:4"]) {
+      const filesystem = new FakeFilesystem(KEY_BYTES);
+      filesystem.hooks.set(event, () => {
+        filesystem.key!.metadata = keyMetadata({ ino: 90n });
+      });
+      await expectCode(
+        synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+        "approval_key_unsafe",
+      );
+    }
+    for (const event of ["key.lstat:2", "key.lstat:3", "key.lstat:4"]) {
+      const filesystem = new FakeFilesystem(KEY_BYTES);
+      filesystem.hooks.set(event, () => {
+        filesystem.key!.metadata = keyMetadata({ mode: 0o100640n });
+      });
+      await expectCode(
+        synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+        "approval_key_unsafe",
+      );
+    }
+    for (const event of [
+      "directory.stat:3",
+      "directory.stat:4",
+      "directory.stat:5",
+    ]) {
+      const filesystem = new FakeFilesystem(KEY_BYTES);
+      filesystem.hooks.set(event, () => {
+        filesystem.directoryDescriptorMetadata = directoryMetadata({
+          ino: 91n,
+        });
+      });
+      await expectCode(
+        synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+        "approval_key_unsafe",
+      );
+    }
+    for (const event of [
+      "directory.lstat:3",
+      "directory.lstat:4",
+      "directory.lstat:5",
+    ]) {
+      const filesystem = new FakeFilesystem(KEY_BYTES);
+      filesystem.hooks.set(event, () => {
+        filesystem.directoryPathMetadata = directoryMetadata({ ino: 92n });
+      });
+      await expectCode(
+        synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+        "approval_key_unsafe",
+      );
+    }
+  });
+
+  it("maps every synchronization boundary failure to I/O, preserves primary errors, and permits only a fresh retry", async () => {
+    const baseline = new FakeFilesystem(KEY_BYTES);
+    const baselineLease = await synchronizeExistingPhase3ApprovalKey(
+      fakeOptions(baseline),
+    );
+    baselineLease.release();
+
+    for (const event of baseline.events) {
+      const filesystem = new FakeFilesystem(KEY_BYTES);
+      filesystem.failures.set(event, errno("EIO", `canary ${event}`));
+      await expectCode(
+        synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+        "approval_key_io_failure",
+      );
+      if (event.startsWith("key.close"))
+        expect(
+          filesystem.events.filter((seen) => seen.startsWith("key.close")),
+        ).toHaveLength(1);
+      if (event.startsWith("directory.close"))
+        expect(
+          filesystem.events.filter((seen) =>
+            seen.startsWith("directory.close"),
+          ),
+        ).toHaveLength(1);
+      for (const target of new Set(filesystem.readTargets))
+        expectIndexedZero(target, intrinsicTestByteLength(target));
+    }
+
+    for (const [primaryCode, secondRead] of [
+      ["approval_key_corrupt", Buffer.alloc(PHASE3_APPROVAL_KEY_BYTES)],
+      ["approval_key_unsafe", Buffer.alloc(PHASE3_APPROVAL_KEY_BYTES, 0x6f)],
+    ] as const) {
+      const filesystem = new FakeFilesystem(KEY_BYTES);
+      let parentCloseObservedOwnedBytes = false;
+      filesystem.hooks.set("key.read:3", () => {
+        if (filesystem.key !== undefined)
+          filesystem.key.bytes = Buffer.from(secondRead);
+      });
+      filesystem.hooks.set("key.close:1", () => {
+        for (const target of [
+          filesystem.readTargets[0]!,
+          filesystem.readTargets[2]!,
+        ])
+          for (let index = 0; index < PHASE3_APPROVAL_KEY_BYTES; index += 1)
+            target[index] = 0x7c;
+      });
+      filesystem.hooks.set("directory.close:1", () => {
+        parentCloseObservedOwnedBytes = [
+          filesystem.readTargets[0]!,
+          filesystem.readTargets[2]!,
+        ].every((target) => target[0] === 0x7c);
+      });
+      filesystem.failures.set("key.close:1", errno("EIO"));
+      filesystem.failures.set("directory.close:1", errno("EIO"));
+      await expectCode(
+        synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+        primaryCode,
+      );
+      expectSyncHandlesClosedOnceInOrder(filesystem);
+      expect(parentCloseObservedOwnedBytes).toBe(true);
+      for (const target of [
+        filesystem.readTargets[0]!,
+        filesystem.readTargets[2]!,
+      ])
+        expectIndexedZero(target, PHASE3_APPROVAL_KEY_BYTES);
+    }
+
+    const retry = new FakeFilesystem(KEY_BYTES);
+    retry.failures.set("key.sync:1", errno("ENOTSUP"));
+    await expectCode(
+      synchronizeExistingPhase3ApprovalKey(fakeOptions(retry)),
+      "approval_key_io_failure",
+    );
+    retry.failures.clear();
+    const lease = await synchronizeExistingPhase3ApprovalKey(
+      fakeOptions(retry),
+    );
+    expect(lease.key).toEqual(KEY_BYTES);
+    lease.release();
+  });
+
+  it("rejects malformed key/parent sync and close results without a lease", async () => {
+    for (const event of [
+      "key.sync:1",
+      "directory.sync:1",
+      "key.close:1",
+      "directory.close:1",
+    ]) {
+      const filesystem = new FakeFilesystem(KEY_BYTES);
+      filesystem.malformedResults.add(event);
+      await expectCode(
+        synchronizeExistingPhase3ApprovalKey(fakeOptions(filesystem)),
+        "approval_key_io_failure",
+      );
+      for (const target of new Set(filesystem.readTargets))
+        expectIndexedZero(target, intrinsicTestByteLength(target));
+    }
+  });
+
+  it("wipes verification after cleanup and wipes both buffers on failure despite prototype tricks", async () => {
+    const successful = new FakeFilesystem(KEY_BYTES);
+    successful.hooks.set("directory.close:1", () => {
+      const verification = successful.readTargets[2]!;
+      verification.fill(0x7d);
+      Object.defineProperty(verification, "byteLength", { value: 0 });
+      Object.defineProperty(verification, "length", { value: 0 });
+      Object.defineProperty(verification, "fill", {
+        value: () => {
+          throw new Error("verification fill canary");
+        },
+        configurable: true,
+      });
+      Object.setPrototypeOf(verification, null);
+    });
+    const lease = await synchronizeExistingPhase3ApprovalKey(
+      fakeOptions(successful),
+    );
+    expectIndexedZero(successful.readTargets[2]!, PHASE3_APPROVAL_KEY_BYTES);
+    expect(lease.key).toEqual(KEY_BYTES);
+    lease.release();
+
+    const failing = new FakeFilesystem(KEY_BYTES);
+    let parentCloseObservedOwnedBytes = false;
+    failing.hooks.set("key.close:1", () => {
+      for (const target of [failing.readTargets[0]!, failing.readTargets[2]!]) {
+        for (let index = 0; index < intrinsicTestByteLength(target); index += 1)
+          target[index] = 0x7e;
+        Object.defineProperty(target, "byteLength", { value: 0 });
+        Object.defineProperty(target, "length", { value: 0 });
+        Object.setPrototypeOf(target, null);
+      }
+    });
+    failing.hooks.set("directory.close:1", () => {
+      parentCloseObservedOwnedBytes = [
+        failing.readTargets[0]!,
+        failing.readTargets[2]!,
+      ].every((target) => target[0] === 0x7e);
+    });
+    failing.failures.set("key.close:1", errno("EIO"));
+    await expectCode(
+      synchronizeExistingPhase3ApprovalKey(fakeOptions(failing)),
+      "approval_key_io_failure",
+    );
+    expectSyncHandlesClosedOnceInOrder(failing);
+    expect(parentCloseObservedOwnedBytes).toBe(true);
+    for (const target of [failing.readTargets[0]!, failing.readTargets[2]!])
+      expectIndexedZero(target, intrinsicTestByteLength(target));
+  });
 });
 
 const nativeRoots: string[] = [];
@@ -791,7 +1326,7 @@ const nativeAvailable =
   process.getuid() === process.geteuid();
 
 describe.skipIf(!nativeAvailable)(
-  "Phase 3P native Linux syscall evidence",
+  "Phase 3P through Phase 3Q native Linux syscall evidence",
   () => {
     afterEach(async () => {
       const roots = nativeRoots.splice(0);
@@ -827,6 +1362,35 @@ describe.skipIf(!nativeAvailable)(
       lease.release();
     });
 
+    it("fsyncs a native O_RDONLY key and retained parent without changing content across repeated and concurrent synchronization", async () => {
+      const stateDirectory = await nativeStateDirectory();
+      const keyPath = join(stateDirectory, "approval.key");
+      const options = { stateDirectory, keyPath };
+      await provisionPhase3ApprovalKey(options);
+      const before = await readFile(keyPath);
+
+      const first = await synchronizeExistingPhase3ApprovalKey(options);
+      const repeated = await synchronizeExistingPhase3ApprovalKey(options);
+      const concurrent = await Promise.all([
+        synchronizeExistingPhase3ApprovalKey(options),
+        synchronizeExistingPhase3ApprovalKey(options),
+      ]);
+      expect(first.syncStatus).toBe("file_and_parent_sync_completed");
+      expect(repeated.syncStatus).toBe("file_and_parent_sync_completed");
+      expect(concurrent.map((lease) => lease.syncStatus)).toEqual([
+        "file_and_parent_sync_completed",
+        "file_and_parent_sync_completed",
+      ]);
+      expect(first.key).toEqual(before);
+      expect(repeated.key).toEqual(before);
+      for (const lease of concurrent) expect(lease.key).toEqual(before);
+      expect(await readFile(keyPath)).toEqual(before);
+
+      first.release();
+      repeated.release();
+      for (const lease of concurrent) lease.release();
+    });
+
     it("provides native nofollow, symlink, and mode evidence", async () => {
       const stateDirectory = await nativeStateDirectory();
       const keyPath = join(stateDirectory, "approval.key");
@@ -859,7 +1423,25 @@ describe.skipIf(!nativeAvailable)(
       );
     });
 
-    it("bridges only after known provision success to a distinct pre-existing durable-store root", async () => {
+    it("does not treat synchronization as authority to initialize an empty distinct store root", async () => {
+      const parent = await nativeParent("phase3-key-empty-store-");
+      const stateDirectory = join(parent, "key-state");
+      const storeRoot = join(parent, "approval-store");
+      await mkdir(stateDirectory, { mode: 0o700 });
+      await mkdir(storeRoot, { mode: 0o700 });
+      const keyPath = join(stateDirectory, "approval.key");
+      await provisionPhase3ApprovalKey({ stateDirectory, keyPath });
+
+      const lease = await synchronizeExistingPhase3ApprovalKey({
+        stateDirectory,
+        keyPath,
+      });
+      expect(await readdir(storeRoot)).toEqual([]);
+      lease.release();
+      expect(await readdir(storeRoot)).toEqual([]);
+    });
+
+    it("bridges only after an independently authorized header exists, then synchronizes and reopens that distinct store", async () => {
       const parent = await nativeParent("phase3-key-bridge-");
       const stateDirectory = join(parent, "key-state");
       const storeRoot = join(parent, "approval-store");
@@ -871,7 +1453,28 @@ describe.skipIf(!nativeAvailable)(
 
       const keyPath = join(stateDirectory, "approval.key");
       await provisionPhase3ApprovalKey({ stateDirectory, keyPath });
-      const lease = await loadPhase3ApprovalKey({ stateDirectory, keyPath });
+      const authorityLease = await loadPhase3ApprovalKey({
+        stateDirectory,
+        keyPath,
+      });
+      const authorizedStore = new DurablePhase3ApprovalGrants(
+        storeRoot,
+        authorityLease.key,
+      );
+      try {
+        await authorizedStore.initialize();
+      } finally {
+        await authorizedStore.close();
+        authorityLease.release();
+      }
+      expect(await readFile(join(storeRoot, "header.json"))).not.toHaveLength(
+        0,
+      );
+
+      const lease = await synchronizeExistingPhase3ApprovalKey({
+        stateDirectory,
+        keyPath,
+      });
       const storeA = new DurablePhase3ApprovalGrants(storeRoot, lease.key);
       const storeB = new DurablePhase3ApprovalGrants(storeRoot, lease.key);
       const wrongKey = Buffer.alloc(PHASE3_APPROVAL_KEY_BYTES, 0x3c);
@@ -969,6 +1572,7 @@ interface FakeKey {
 }
 
 type ScriptResult = number | Error;
+type ReadScriptResult = ScriptResult | "malformed";
 
 class FakeFilesystem implements Phase3ApprovalKeyFilesystem {
   readonly flags = FLAGS;
@@ -979,9 +1583,10 @@ class FakeFilesystem implements Phase3ApprovalKeyFilesystem {
     readonly mode: number | undefined;
   }> = [];
   readonly failures = new Map<string, Error>();
+  readonly malformedResults = new Set<string>();
   readonly hooks = new Map<string, () => void | Promise<void>>();
   readonly writeScript: ScriptResult[] = [];
-  readonly readScript: ScriptResult[] = [];
+  readonly readScript: ReadScriptResult[] = [];
   readonly readTargets: Buffer[] = [];
   directoryPathMetadata = directoryMetadata();
   directoryDescriptorMetadata = directoryMetadata();
@@ -1051,14 +1656,16 @@ class FakeFilesystem implements Phase3ApprovalKeyFilesystem {
         return { bytesWritten: 0 };
       },
       sync: async () => {
-        await this.event("directory.sync");
+        const token = await this.event("directory.sync");
+        if (this.malformedResults.has(token)) return 1 as unknown as undefined;
       },
       stat: async () => {
         await this.event("directory.stat");
         return { ...this.directoryDescriptorMetadata };
       },
       close: async () => {
-        await this.event("directory.close");
+        const token = await this.event("directory.close");
+        if (this.malformedResults.has(token)) return 1 as unknown as undefined;
       },
     };
   }
@@ -1071,6 +1678,8 @@ class FakeFilesystem implements Phase3ApprovalKeyFilesystem {
         this.readTargets.push(target);
         const scripted = this.readScript.shift();
         if (scripted instanceof Error) throw scripted;
+        if (scripted === "malformed")
+          return {} as { readonly bytesRead: number };
         const available = Math.max(
           0,
           (this.key?.bytes.byteLength ?? 0) - position,
@@ -1108,7 +1717,8 @@ class FakeFilesystem implements Phase3ApprovalKeyFilesystem {
         return { bytesWritten };
       },
       sync: async () => {
-        await this.event("key.sync");
+        const token = await this.event("key.sync");
+        if (this.malformedResults.has(token)) return 1 as unknown as undefined;
       },
       stat: async () => {
         await this.event("key.stat");
@@ -1116,12 +1726,13 @@ class FakeFilesystem implements Phase3ApprovalKeyFilesystem {
         return { ...this.key.metadata };
       },
       close: async () => {
-        await this.event("key.close");
+        const token = await this.event("key.close");
+        if (this.malformedResults.has(token)) return 1 as unknown as undefined;
       },
     };
   }
 
-  private async event(name: string): Promise<void> {
+  private async event(name: string): Promise<string> {
     const count = (this.counts.get(name) ?? 0) + 1;
     this.counts.set(name, count);
     const token = `${name}:${count}`;
@@ -1130,6 +1741,7 @@ class FakeFilesystem implements Phase3ApprovalKeyFilesystem {
     if (hook !== undefined) await hook();
     const failure = this.failures.get(token);
     if (failure !== undefined) throw failure;
+    return token;
   }
 }
 
@@ -1170,4 +1782,30 @@ async function nativeParent(prefix: string): Promise<string> {
 function expectIndexedZero(bytes: Uint8Array, byteLength: number): void {
   for (let index = 0; index < byteLength; index += 1)
     expect(bytes[index]).toBe(0);
+}
+
+function expectSyncHandlesClosedOnceInOrder(filesystem: FakeFilesystem): void {
+  expect(filesystem.opens.filter(({ path }) => path === KEY_PATH)).toHaveLength(
+    1,
+  );
+  expect(
+    filesystem.opens.filter(({ path }) => path === STATE_DIRECTORY),
+  ).toHaveLength(1);
+  expect(
+    filesystem.events.filter((event) => event.startsWith("key.close:")),
+  ).toEqual(["key.close:1"]);
+  expect(
+    filesystem.events.filter((event) => event.startsWith("directory.close:")),
+  ).toEqual(["directory.close:1"]);
+  expect(filesystem.events.indexOf("key.close:1")).toBeLessThan(
+    filesystem.events.indexOf("directory.close:1"),
+  );
+}
+
+function intrinsicTestByteLength(bytes: Uint8Array): number {
+  return Reflect.get(
+    Object.getPrototypeOf(Uint8Array.prototype) as object,
+    "byteLength",
+    bytes,
+  ) as number;
 }

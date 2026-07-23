@@ -43,7 +43,7 @@ const phase3Files = [
 
 const phase3NativeFiles = ["openat2-replace.c", "approval-custody.c"] as const;
 
-describe("Phase 3A through Phase 3P isolation", () => {
+describe("Phase 3A through Phase 3Q isolation", () => {
   it("does not register tools or enable writes", () => {
     const phase1Names = ReadTools.prototype.names.call({});
     expect(phase1Names.some((name) => name.includes("phase3"))).toBe(false);
@@ -53,7 +53,7 @@ describe("Phase 3A through Phase 3P isolation", () => {
     expect(phase3Contract.liveAdapters).toBe("absent");
   });
 
-  it("keeps the Phase 3B through Phase 3P adapters out of runtime composition", () => {
+  it("keeps the Phase 3B through Phase 3Q adapters out of runtime composition", () => {
     for (const path of [
       "src/index.ts",
       "src/application.ts",
@@ -97,10 +97,12 @@ describe("Phase 3A through Phase 3P isolation", () => {
       expect(source).not.toContain("phase3/approvalKey");
       expect(source).not.toContain("provisionPhase3ApprovalKey");
       expect(source).not.toContain("loadPhase3ApprovalKey");
+      expect(source).not.toContain("synchronizeExistingPhase3ApprovalKey");
+      expect(source).not.toContain("Phase3ApprovalKeySyncLease");
     }
   });
 
-  it("keeps the Phase 3P approval key on an inert test-only import boundary", () => {
+  it("keeps the Phase 3Q approval key on an inert test-only import boundary", () => {
     const source = readFileSync("src/phase3/approvalKey.ts", "utf8");
     const imports = moduleSpecifiers(
       "src/phase3/approvalKey.ts",
@@ -209,7 +211,7 @@ describe("Phase 3A through Phase 3P isolation", () => {
       expect(source).not.toContain(forbidden);
   });
 
-  it("keeps root and add-on Phase 3A through Phase 3P source mirrors exact", () => {
+  it("keeps root and add-on Phase 3A through Phase 3Q source mirrors exact", () => {
     for (const file of phase3Files) {
       const root = readFileSync(`src/phase3/${file}`, "utf8");
       const addon = readFileSync(`addon/app/src/phase3/${file}`, "utf8");
