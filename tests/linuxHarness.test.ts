@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, writeFile, readFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -665,4 +665,834 @@ process.exit(99);
     expect(addon).not.toContain("persistence-harness");
     expect(addon).not.toContain("persistence-fault-shim");
   });
+});
+
+const phase3ApprovalRows = [
+  "env:linux",
+  "env:native-fs",
+  "env:root-private",
+  "init:same-key-race",
+  "init:different-key-race",
+  "init:wrong-key-restart",
+  "cross:issue-consume-replay",
+  "race:issue-colliding-uuid",
+  "race:consume",
+  "tamper:header",
+  "tamper:grant",
+  "tamper:receipt",
+  "exhaustion:header-same-instance-retry",
+  "exhaustion:grant-same-instance-retry",
+  "exhaustion:receipt-same-instance-retry",
+  "topology:root-mode",
+  "topology:root-owner",
+  "topology:header-symlink",
+  "topology:header-hardlink",
+  "topology:header-nonregular",
+  "topology:root-unknown-entry",
+  "topology:root-entry-overflow",
+  "topology:slot-entry-overflow",
+  "kill:header:precommit",
+  "kill:header:postcommit",
+  "kill:header:parent-synced",
+  "kill:grant:precommit",
+  "kill:grant:postcommit",
+  "kill:grant:parent-synced",
+  "kill:receipt:precommit",
+  "kill:receipt:postcommit",
+  "kill:receipt:parent-synced",
+  "fault:header:open",
+  "fault:header:pwrite-fail",
+  "fault:header:pwrite-short",
+  "fault:header:pwrite-enospc",
+  "fault:header:file-fsync",
+  "fault:header:link-family",
+  "fault:header:parent-fsync",
+  "fault:grant:open",
+  "fault:grant:pwrite-fail",
+  "fault:grant:pwrite-short",
+  "fault:grant:pwrite-enospc",
+  "fault:grant:file-fsync",
+  "fault:grant:stage-fsync",
+  "fault:grant:rename",
+  "fault:grant:parent-fsync",
+  "fault:receipt:open",
+  "fault:receipt:pwrite-fail",
+  "fault:receipt:pwrite-short",
+  "fault:receipt:pwrite-enospc",
+  "fault:receipt:file-fsync",
+  "fault:receipt:link-family",
+  "fault:receipt:parent-fsync",
+  "shim:link:fail",
+  "shim:linkat:fail",
+] as const;
+
+type ApprovalEvidenceStatus = "PASSED" | "FAILED" | "BLOCKED" | "UNVERIFIED";
+
+interface ApprovalWorkerClient {
+  readonly pid?: number;
+  readonly processGroupAbsent: boolean;
+  ready(): Promise<void>;
+}
+
+interface ApprovalWorkerState {
+  clients: Set<ApprovalWorkerClient>;
+}
+
+interface ApprovalHarnessLifecycle {
+  WorkerClient: new (
+    config: { node: string; worker: string },
+    root: string,
+    options?: { env?: NodeJS.ProcessEnv; timeoutMs?: number },
+  ) => ApprovalWorkerClient;
+  closeWorker(
+    state: ApprovalWorkerState,
+    client: ApprovalWorkerClient,
+  ): Promise<void>;
+  terminateWorkers(state: ApprovalWorkerState): Promise<void>;
+  settleProcessGroupProbe(
+    probe: {
+      pid?: number;
+      lifecycle: Promise<
+        | { kind: "error"; error: Error }
+        | { kind: "close"; code: number | null; signal: NodeJS.Signals | null }
+      >;
+      closed: Promise<{
+        kind: "close";
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      }>;
+    },
+    controls?: {
+      assertAbsent?: (pid: number) => Promise<void>;
+      terminate?: (pid: number) => void;
+      probeTimeoutMs?: number;
+      cleanupTimeoutMs?: number;
+    },
+  ): Promise<void>;
+  buildDiagnosticReport(
+    error: unknown,
+    state?: { base?: string },
+  ): {
+    total: number;
+    details: ReadonlyArray<string>;
+    truncated: boolean;
+  };
+  buildNonPassingEvidence(
+    error: unknown,
+    state?: { base?: string },
+  ): {
+    reason: string;
+    diagnostic: {
+      total: number;
+      details: ReadonlyArray<string>;
+      truncated: boolean;
+    };
+  };
+  parseApprovalEvidence(output: string): {
+    rows: ReadonlyArray<{ status: ApprovalEvidenceStatus }>;
+    summary: {
+      status: ApprovalEvidenceStatus;
+      nonPassed: ReadonlyArray<string>;
+    };
+  };
+}
+
+const controlledApprovalWorker = `
+import { spawn } from "node:child_process";
+
+const behavior = process.env.HA_PHASE3M_WORKER_FIXTURE;
+const send = (message) => new Promise((resolve, reject) => {
+  process.send(message, (error) => error ? reject(error) : resolve());
+});
+
+if (behavior === "malformed") {
+  await send({ type: "malformed" });
+  setInterval(() => undefined, 1_000);
+} else if (behavior === "overflow") {
+  await send({ type: "ready", protocol: 1, padding: "x".repeat(300_000) });
+  setInterval(() => undefined, 1_000);
+} else if (behavior === "timeout") {
+  setInterval(() => undefined, 1_000);
+} else if (behavior === "survivor") {
+  const survivor = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000)"], {
+    stdio: "ignore",
+  });
+  survivor.unref();
+  await send({ type: "ready", protocol: 1 });
+  process.on("message", async (message) => {
+    if (message?.type !== "request" || message.command !== "close") return;
+    await send({
+      type: "result",
+      requestId: message.requestId,
+      command: "close",
+      ok: true,
+      evidence: { closed: true },
+    });
+    process.disconnect();
+  });
+} else {
+  process.exit(64);
+}
+`;
+
+function phase3ApprovalEvidence(
+  statuses: Readonly<Record<string, ApprovalEvidenceStatus>> = {},
+): string {
+  const rows = phase3ApprovalRows.map((id) => ({
+    type: "row",
+    id,
+    status: statuses[id] ?? "PASSED",
+    evidence: { fixture: true },
+  }));
+  const nonPassed = rows
+    .filter((row) => row.status !== "PASSED")
+    .map((row) => row.id);
+  const status = rows.some((row) => row.status === "FAILED")
+    ? "FAILED"
+    : rows.some((row) => row.status === "BLOCKED")
+      ? "BLOCKED"
+      : rows.some((row) => row.status !== "PASSED")
+        ? "UNVERIFIED"
+        : "PASSED";
+  return [
+    {
+      type: "manifest",
+      version: 1,
+      requiredRows: phase3ApprovalRows,
+      adapters: { filesystem: "default", durability: "default" },
+      prerequisites: ["linux", "uid0", "compiler", "process-groups"],
+      limitations: [
+        "actual-power-cut-unverified",
+        "grant-native-topology-unverified",
+        "receipt-native-topology-unverified",
+      ],
+    },
+    ...rows,
+    {
+      type: "summary",
+      status,
+      required: phase3ApprovalRows.length,
+      executed: rows.length,
+      passed: rows.length - nonPassed.length,
+      nonPassed,
+    },
+  ]
+    .map((record) => JSON.stringify(record))
+    .join("\n")
+    .concat("\n");
+}
+
+describe("Phase 3M native approval evidence harness", () => {
+  const harnessUrl = new URL(
+    "../scripts/linux/phase3-approval-harness.mjs",
+    import.meta.url,
+  );
+
+  async function loadApprovalLifecycle(): Promise<ApprovalHarnessLifecycle> {
+    return (await import(
+      harnessUrl.href
+    )) as unknown as ApprovalHarnessLifecycle;
+  }
+
+  async function withControlledApprovalWorker(
+    operation: (worker: string, root: string) => Promise<void>,
+  ): Promise<void> {
+    const root = await mkdtemp(join(tmpdir(), "ha-phase3m-worker-"));
+    const worker = join(root, "controlled-worker.mjs");
+    try {
+      await writeFile(worker, controlledApprovalWorker, { mode: 0o600 });
+      await operation(worker, root);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  function expectNoProcessGroup(pid: number | undefined): void {
+    if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 0)
+      throw new Error("controlled worker PID is unavailable");
+    try {
+      process.kill(-(pid ?? 0), 0);
+    } catch (error) {
+      expect((error as NodeJS.ErrnoException).code).toBe("ESRCH");
+      return;
+    }
+    throw new Error(`controlled worker process group ${pid} survived cleanup`);
+  }
+
+  async function ensureControlledWorkersStopped(
+    harness: ApprovalHarnessLifecycle,
+    state: ApprovalWorkerState,
+  ): Promise<void> {
+    if (state.clients.size === 0) return;
+    try {
+      await harness.terminateWorkers(state);
+    } catch (error) {
+      if (state.clients.size > 0) throw error;
+    }
+  }
+
+  async function runFake(output: string, allow = true, nodeEnv = "test") {
+    return await execFileAsync(
+      process.execPath,
+      [fileURLToPath(harnessUrl), ...(allow ? ["--allow-test-fake"] : [])],
+      {
+        env: {
+          ...process.env,
+          NODE_ENV: nodeEnv,
+          HA_PHASE3_APPROVAL_HARNESS_FAKE_OUTPUT_BASE64:
+            Buffer.from(output).toString("base64"),
+        },
+      },
+    );
+  }
+
+  async function expectFakeFailure(
+    output: string,
+    allow = true,
+    nodeEnv = "test",
+  ) {
+    try {
+      await runFake(output, allow, nodeEnv);
+    } catch (error) {
+      return error as { stdout?: string; stderr?: string; code?: number };
+    }
+    throw new Error("expected Phase 3M fake evidence failure");
+  }
+
+  it("freezes all 56 rows and keeps the harness inert and mirrored", async () => {
+    const [harness, worker, shim, rootPackage, addonPackage, dockerfile] =
+      await Promise.all([
+        readFile(harnessUrl, "utf8"),
+        readFile(
+          new URL(
+            "../scripts/linux/phase3-approval-worker.mjs",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+        readFile(
+          new URL("../scripts/linux/persistence-fault-shim.c", import.meta.url),
+          "utf8",
+        ),
+        readFile(new URL("../package.json", import.meta.url), "utf8"),
+        readFile(new URL("../addon/app/package.json", import.meta.url), "utf8"),
+        readFile(new URL("../addon/Dockerfile", import.meta.url), "utf8"),
+      ]);
+    expect(phase3ApprovalRows).toHaveLength(56);
+    for (const id of phase3ApprovalRows) expect(harness).toContain(`"${id}"`);
+    for (const token of [
+      "mandatory Phase 3M row registry mismatch",
+      "parseApprovalEvidence",
+      "appendBounded",
+      "validateWorkerMessage",
+      "MAX_STDIO_BYTES",
+      "MAX_IPC_BYTES",
+      "MAX_IPC_MESSAGES",
+      "WORKER_TIMEOUT_MS",
+      "detached: true",
+      "assertNoProcessGroup",
+      "actual-power-cut-unverified",
+      "grant-native-topology-unverified",
+      "receipt-native-topology-unverified",
+      "NODE_ENV",
+      "--allow-test-fake",
+      '"-Wall"',
+      '"-Wextra"',
+      '"-Werror"',
+    ])
+      expect(harness).toContain(token);
+    for (const token of [
+      "DurablePhase3ApprovalGrants",
+      'filesystem: "default"',
+      'durability: "default"',
+      "RELATIVE_ARTIFACT_PATTERN",
+      'message.command === "initialize" ? "header_" : "grant_"',
+    ])
+      expect(worker).toContain(token);
+    for (const token of [
+      "target_matches",
+      '"open-family"',
+      '"link-family"',
+      "int link(",
+      "int linkat(",
+    ])
+      expect(shim).toContain(token);
+    const rootScript = (
+      JSON.parse(rootPackage) as { scripts: Record<string, string> }
+    ).scripts["validate:linux:approval"];
+    const addonScript = (
+      JSON.parse(addonPackage) as { scripts: Record<string, string> }
+    ).scripts["validate:linux:approval"];
+    expect(rootScript).toBe(
+      "pnpm build && node scripts/linux/phase3-approval-harness.mjs",
+    );
+    expect(addonScript).toBe(rootScript);
+    expect(dockerfile).not.toContain("phase3-approval-harness");
+    expect(dockerfile).not.toContain("phase3-approval-worker");
+    expect(harness).not.toContain("createHmac");
+    expect(harness).not.toContain("shell: true");
+  });
+
+  it("strictly parses manifest, ordered rows, and summary through the dual-gated fake seam", async () => {
+    const valid = phase3ApprovalEvidence();
+    const result = await runFake(valid);
+    expect(result.stdout).toBe(valid);
+    expect(result.stderr).toBe("");
+
+    const duplicateRecords = valid.trimEnd().split("\n");
+    duplicateRecords[2] = duplicateRecords[1]!;
+    const duplicate = `${duplicateRecords.join("\n")}\n`;
+    expect((await expectFakeFailure(duplicate)).stderr).toContain(
+      "evidence row order mismatch",
+    );
+
+    const missingRecords = valid.trimEnd().split("\n");
+    missingRecords.splice(2, 1);
+    expect(
+      (await expectFakeFailure(`${missingRecords.join("\n")}\n`)).stderr,
+    ).toContain("expected 56 evidence rows");
+
+    const malformedRecords = valid.trimEnd().split("\n");
+    malformedRecords[2] = "{";
+    expect(
+      (await expectFakeFailure(`${malformedRecords.join("\n")}\n`)).stderr,
+    ).toContain("malformed JSON");
+
+    const badSummaryRecords = valid.trimEnd().split("\n");
+    const summary = JSON.parse(badSummaryRecords.at(-1) ?? "null") as {
+      passed: number;
+    };
+    summary.passed -= 1;
+    badSummaryRecords[badSummaryRecords.length - 1] = JSON.stringify(summary);
+    expect(
+      (await expectFakeFailure(`${badSummaryRecords.join("\n")}\n`)).stderr,
+    ).toContain("summary does not match evidence rows");
+
+    expect((await expectFakeFailure(`${valid}{`)).stderr).toContain(
+      "approval evidence must end with one JSONL newline",
+    );
+    expect((await expectFakeFailure(valid, false)).stderr).toContain(
+      "requires NODE_ENV=test and --allow-test-fake",
+    );
+    expect(
+      (await expectFakeFailure(valid, true, "production")).stderr,
+    ).toContain("requires NODE_ENV=test and --allow-test-fake");
+  });
+
+  it("returns nonzero for failed, blocked, and unverified evidence", async () => {
+    for (const status of ["FAILED", "BLOCKED", "UNVERIFIED"] as const) {
+      const output = phase3ApprovalEvidence({ "env:linux": status });
+      const failure = await expectFakeFailure(output);
+      expect(failure.stdout).toBe(output);
+      expect(failure.stderr ?? "").toBe("");
+    }
+  });
+
+  it("enforces exported output and IPC controls without native execution", async () => {
+    const moduleUrl = harnessUrl.href;
+    const program = `
+const harness = await import(${JSON.stringify(moduleUrl)});
+let overflow = false;
+try { harness.appendBounded([], Buffer.alloc(5), 4, "fixture"); } catch { overflow = true; }
+if (!overflow) process.exit(2);
+if (harness.validateWorkerMessage({ type: "ready", protocol: 1 }).kind !== "ready") process.exit(3);
+let malformed = false;
+try { harness.validateWorkerMessage({ type: "hook", requestId: 1, hook: { stage: "header_pre_commit", commitState: "not_committed", relativePending: "/escape", relativeFinal: "header.json" } }); } catch { malformed = true; }
+if (!malformed) process.exit(4);
+if (harness.fakeEvidenceAllowed({ NODE_ENV: "test" }, true) !== true) process.exit(5);
+if (harness.fakeEvidenceAllowed({ NODE_ENV: "test" }, false) !== false) process.exit(6);
+`;
+    await expect(
+      execFileAsync(process.execPath, ["--input-type=module", "-e", program]),
+    ).resolves.toMatchObject({ stdout: "", stderr: "" });
+  });
+
+  it("contains missing-executable spawn failure and still emits a complete contract", async () => {
+    const harness = await loadApprovalLifecycle();
+    const root = await mkdtemp(join(tmpdir(), "ha-phase3m-missing-"));
+    const missingNode = join(root, "missing-node-executable");
+    const state: ApprovalWorkerState = { clients: new Set() };
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    const startedAt = Date.now();
+    try {
+      const client = new harness.WorkerClient(
+        { node: missingNode, worker: fileURLToPath(harnessUrl) },
+        root,
+      );
+      state.clients.add(client);
+      await expect(client.ready()).rejects.toThrow("worker PID is unavailable");
+      await expect(harness.terminateWorkers(state)).rejects.toThrow(
+        "worker cleanup failed",
+      );
+      await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      expect(state.clients.size).toBe(0);
+      expect(client.processGroupAbsent).toBe(true);
+      expect(unhandled).toEqual([]);
+
+      let failure:
+        | { code?: number; stdout?: string; stderr?: string }
+        | undefined;
+      try {
+        await execFileAsync(process.execPath, [
+          fileURLToPath(harnessUrl),
+          "--node",
+          missingNode,
+        ]);
+      } catch (error) {
+        failure = error as {
+          code?: number;
+          stdout?: string;
+          stderr?: string;
+        };
+      }
+      expect(failure?.code).toBe(1);
+      expect(failure?.stderr ?? "").toBe("");
+      const parsed = harness.parseApprovalEvidence(failure?.stdout ?? "");
+      expect(parsed.rows).toHaveLength(56);
+      expect(parsed.summary.status).not.toBe("PASSED");
+      expect(parsed.summary.nonPassed.length).toBeGreaterThan(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await ensureControlledWorkersStopped(harness, state);
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it.runIf(process.platform === "linux")(
+    "fails closed and removes a same-group process-group probe survivor",
+    async () => {
+      const harness = await loadApprovalLifecycle();
+      const root = await mkdtemp(join(tmpdir(), "ha-phase3m-probe-"));
+      const launcher = join(root, "probe-launcher.mjs");
+      const groupPath = join(root, "probe-group");
+      const launcherSource = `#!${process.execPath}
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+
+if (process.argv[2] !== "-e" || process.argv[3] !== "process.exit(0)") process.exit(64);
+const survivor = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1_000)"], {
+  stdio: "ignore",
+});
+writeFileSync(process.env.HA_PHASE3M_PROBE_GROUP_PATH, String(process.pid), {
+  flag: "wx",
+  mode: 0o600,
+});
+survivor.unref();
+`;
+      let groupId: number | undefined;
+      let cleanupFailure: unknown;
+      try {
+        await writeFile(launcher, launcherSource, { mode: 0o700 });
+        await chmod(launcher, 0o700);
+        let failure:
+          | { code?: number; stdout?: string; stderr?: string }
+          | undefined;
+        try {
+          await execFileAsync(
+            process.execPath,
+            [fileURLToPath(harnessUrl), "--node", launcher],
+            {
+              env: {
+                ...process.env,
+                HA_PHASE3M_PROBE_GROUP_PATH: groupPath,
+              },
+              timeout: 20_000,
+              killSignal: "SIGKILL",
+              maxBuffer: 2 * 1_048_576,
+            },
+          );
+        } catch (error) {
+          failure = error as {
+            code?: number;
+            stdout?: string;
+            stderr?: string;
+          };
+        }
+
+        groupId = Number((await readFile(groupPath, "utf8")).trim());
+        expect(failure?.code).toBe(1);
+        expect(failure?.stderr ?? "").toBe("");
+        const parsed = harness.parseApprovalEvidence(failure?.stdout ?? "");
+        expect(parsed.rows).toHaveLength(56);
+        expect(parsed.summary.status).not.toBe("PASSED");
+        expect(parsed.summary.nonPassed.length).toBeGreaterThan(0);
+        expectNoProcessGroup(groupId);
+      } finally {
+        if (Number.isSafeInteger(groupId) && (groupId ?? 0) > 0) {
+          try {
+            process.kill(-(groupId ?? 0), "SIGKILL");
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH")
+              cleanupFailure = error;
+          }
+        }
+        await rm(root, { recursive: true, force: true });
+      }
+      if (cleanupFailure) throw cleanupFailure;
+    },
+    30_000,
+  );
+
+  async function expectProbeSettlementRegressions(): Promise<void> {
+    const harness = await loadApprovalLifecycle();
+    const rawCanary = `${tmpdir()}/private-preflight/SECRET_ENV_VALUE`;
+
+    const delayedEvents: string[] = [];
+    let terminated = false;
+    const delayedClose = new Promise<{
+      kind: "close";
+      code: 0;
+      signal: null;
+    }>((resolvePromise) => {
+      setTimeout(() => {
+        delayedEvents.push("close");
+        resolvePromise({ kind: "close", code: 0, signal: null });
+      }, 25);
+    });
+    let delayedFailure: unknown;
+    try {
+      await harness.settleProcessGroupProbe(
+        {
+          pid: 41_001,
+          lifecycle: Promise.resolve({
+            kind: "error",
+            error: new Error(rawCanary),
+          }),
+          closed: delayedClose,
+        },
+        {
+          assertAbsent: async () => {
+            delayedEvents.push(terminated ? "absence-after" : "absence-before");
+            if (!terminated) throw new Error(rawCanary);
+          },
+          terminate: () => {
+            delayedEvents.push("terminate");
+            terminated = true;
+          },
+          probeTimeoutMs: 100,
+          cleanupTimeoutMs: 100,
+        },
+      );
+    } catch (error) {
+      delayedFailure = error;
+    }
+    expect(delayedFailure).toBeInstanceOf(AggregateError);
+    expect(
+      (delayedFailure as AggregateError).errors.map(
+        (error) => (error as Error).message,
+      ),
+    ).toEqual([
+      "process-group probe failed to start",
+      "process-group probe absence was not proven before cleanup",
+    ]);
+    expect(delayedEvents).toEqual([
+      "absence-before",
+      "terminate",
+      "close",
+      "absence-after",
+    ]);
+
+    const noPidEvents: string[] = [];
+    let noPidFailure: unknown;
+    try {
+      await harness.settleProcessGroupProbe(
+        {
+          lifecycle: Promise.resolve({
+            kind: "error",
+            error: new Error(rawCanary),
+          }),
+          closed: new Promise((resolvePromise) => {
+            setTimeout(() => {
+              noPidEvents.push("close");
+              resolvePromise({ kind: "close", code: 0, signal: null });
+            }, 10);
+          }),
+        },
+        { probeTimeoutMs: 100, cleanupTimeoutMs: 100 },
+      );
+    } catch (error) {
+      noPidFailure = error;
+    }
+    expect(noPidFailure).toBeInstanceOf(AggregateError);
+    expect(
+      (noPidFailure as AggregateError).errors.map(
+        (error) => (error as Error).message,
+      ),
+    ).toEqual([
+      "process-group probe failed to start",
+      "process-group probe has no PID",
+      "process-group probe cleanup has no PID; group absence was not claimed",
+    ]);
+    expect(noPidEvents).toEqual(["close"]);
+
+    const missingEvents: string[] = [];
+    let missingFailure: unknown;
+    const startedAt = Date.now();
+    try {
+      await harness.settleProcessGroupProbe(
+        {
+          pid: 41_002,
+          lifecycle: Promise.resolve({
+            kind: "error",
+            error: new Error(rawCanary),
+          }),
+          closed: new Promise(() => undefined),
+        },
+        {
+          assertAbsent: async () => {
+            missingEvents.push("absence");
+            throw new Error(rawCanary);
+          },
+          terminate: () => {
+            missingEvents.push("terminate");
+            throw new Error(rawCanary);
+          },
+          probeTimeoutMs: 20,
+          cleanupTimeoutMs: 20,
+        },
+      );
+    } catch (error) {
+      missingFailure = error;
+    }
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(missingFailure).toBeInstanceOf(AggregateError);
+    expect(
+      (missingFailure as AggregateError).errors.map(
+        (error) => (error as Error).message,
+      ),
+    ).toEqual([
+      "process-group probe failed to start",
+      "process-group probe absence was not proven before cleanup",
+      "process-group probe termination failed",
+      "process-group probe close was not observed during cleanup",
+      "process-group probe absence was not proven after cleanup",
+    ]);
+    expect(missingEvents).toEqual(["absence", "terminate", "absence"]);
+
+    const diagnostic = harness.buildDiagnosticReport(missingFailure, {
+      base: tmpdir(),
+    });
+    expect(diagnostic).toEqual({
+      total: 5,
+      details: [
+        "process-group probe failed to start",
+        "process-group probe absence was not proven before cleanup",
+        "process-group probe termination failed",
+        "process-group probe close was not observed during cleanup",
+        "process-group probe absence was not proven after cleanup",
+      ],
+      truncated: false,
+    });
+    const nonPassing = harness.buildNonPassingEvidence(missingFailure, {
+      base: tmpdir(),
+    });
+    expect(nonPassing.reason).toBe("process-group probe failed to start");
+    expect(nonPassing.diagnostic).toEqual(diagnostic);
+    expect(JSON.stringify(nonPassing)).not.toContain(rawCanary);
+    expect(JSON.stringify(nonPassing)).not.toContain("SECRET_ENV_VALUE");
+  }
+
+  it.runIf(process.platform === "linux")(
+    "bounds probe/IPC failure ordering and proves cleanup",
+    async () => {
+      await expectProbeSettlementRegressions();
+      const harness = await loadApprovalLifecycle();
+      await withControlledApprovalWorker(async (worker, root) => {
+        for (const fixture of [
+          {
+            behavior: "malformed",
+            expected: "worker IPC message is malformed",
+            timeoutMs: 2_000,
+            cleanupFails: false,
+          },
+          {
+            behavior: "overflow",
+            expected: "worker IPC exceeded its bound",
+            timeoutMs: 2_000,
+            cleanupFails: false,
+          },
+          {
+            behavior: "timeout",
+            expected: "worker exceeded 100 ms",
+            timeoutMs: 100,
+            cleanupFails: true,
+          },
+        ] as const) {
+          const state: ApprovalWorkerState = { clients: new Set() };
+          const client = new harness.WorkerClient(
+            { node: process.execPath, worker },
+            root,
+            {
+              env: {
+                ...process.env,
+                HA_PHASE3M_WORKER_FIXTURE: fixture.behavior,
+              },
+              timeoutMs: fixture.timeoutMs,
+            },
+          );
+          state.clients.add(client);
+          try {
+            await expect(client.ready()).rejects.toThrow(fixture.expected);
+            if (fixture.cleanupFails)
+              await expect(harness.terminateWorkers(state)).rejects.toThrow(
+                "worker cleanup failed",
+              );
+            else
+              await expect(
+                harness.terminateWorkers(state),
+              ).resolves.toBeUndefined();
+            expect(state.clients.size).toBe(0);
+            expect(client.processGroupAbsent).toBe(true);
+            expectNoProcessGroup(client.pid);
+          } finally {
+            await ensureControlledWorkersStopped(harness, state);
+          }
+        }
+      });
+    },
+    30_000,
+  );
+
+  it.runIf(process.platform === "linux")(
+    "surfaces a close survivor, retains tracking, and enforces group disappearance",
+    async () => {
+      const harness = await loadApprovalLifecycle();
+      await withControlledApprovalWorker(async (worker, root) => {
+        const state: ApprovalWorkerState = { clients: new Set() };
+        const client = new harness.WorkerClient(
+          { node: process.execPath, worker },
+          root,
+          {
+            env: {
+              ...process.env,
+              HA_PHASE3M_WORKER_FIXTURE: "survivor",
+            },
+            timeoutMs: 5_000,
+          },
+        );
+        state.clients.add(client);
+        try {
+          await client.ready();
+          await expect(harness.closeWorker(state, client)).rejects.toThrow(
+            "survived completion",
+          );
+          expect(state.clients.has(client)).toBe(true);
+          expect(client.processGroupAbsent).toBe(false);
+
+          await expect(
+            harness.terminateWorkers(state),
+          ).resolves.toBeUndefined();
+          expect(state.clients.size).toBe(0);
+          expect(client.processGroupAbsent).toBe(true);
+          expectNoProcessGroup(client.pid);
+        } finally {
+          await ensureControlledWorkersStopped(harness, state);
+        }
+      });
+    },
+    30_000,
+  );
 });

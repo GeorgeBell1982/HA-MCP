@@ -30,6 +30,8 @@ static char normalized_arm[PATH_MAX];
 static char normalized_proof[PATH_MAX];
 static size_t root_length;
 
+static int target_matches(const char *name);
+
 static int normalize_absolute(const char *input, char *output, size_t capacity) {
   char copy[PATH_MAX];
   size_t length, output_length = 1, depth = 0;
@@ -162,7 +164,7 @@ static int write_all(int descriptor, const char *bytes, size_t length) {
 static int intercept_resolved(const char *name, const char *absolute) {
   char relative[PATH_MAX], record[PATH_MAX + 192];
   int length;
-  if (!target || strcmp(target, name) || !armed() ||
+  if (!target_matches(name) || !armed() ||
       !scoped_path(absolute, relative, sizeof(relative)))
     return 0;
   seen++;
@@ -181,7 +183,7 @@ static int intercept_resolved(const char *name, const char *absolute) {
 
 static int intercept_path(const char *name, int directory, const char *path) {
   char absolute[PATH_MAX];
-  if (!target || strcmp(target, name) ||
+  if (!target_matches(name) ||
       !absolute_path(path, directory, absolute, sizeof(absolute)))
     return 0;
   return intercept_resolved(name, absolute);
@@ -237,6 +239,31 @@ static ssize_t short_count(size_t count) {
   return (ssize_t)(count / 2);
 }
 
+static int target_matches(const char *name) {
+  return target &&
+         (!strcmp(target, name) ||
+          (!strcmp(target, "open-family") &&
+           (!strcmp(name, "open") || !strcmp(name, "open64") ||
+            !strcmp(name, "openat") || !strcmp(name, "openat64"))) ||
+          (!strcmp(target, "link-family") &&
+           (!strcmp(name, "link") || !strcmp(name, "linkat"))));
+}
+
+static int intercept_link(const char *name, int old_directory,
+                          const char *old_path, int new_directory,
+                          const char *new_path) {
+  char old_absolute[PATH_MAX], new_absolute[PATH_MAX], ignored[PATH_MAX];
+  if (!target_matches(name) ||
+      !absolute_path(old_path, old_directory, old_absolute,
+                     sizeof(old_absolute)) ||
+      !absolute_path(new_path, new_directory, new_absolute,
+                     sizeof(new_absolute)) ||
+      !scoped_path(old_absolute, ignored, sizeof(ignored)) ||
+      !scoped_path(new_absolute, ignored, sizeof(ignored)))
+    return 0;
+  return intercept_resolved(name, new_absolute);
+}
+
 #define RESOLVE(symbol)                                                     \
   static __typeof__(symbol) *real_##symbol;                                 \
   if (!real_##symbol) real_##symbol = dlsym(RTLD_NEXT, #symbol)
@@ -288,6 +315,19 @@ int openat64(int directory, const char *path, int flags, ...) {
   RESOLVE(openat64);
   if (intercept_path("openat64", directory, path)) return -1;
   return real_openat64(directory, path, flags, create_mode);
+}
+int link(const char *old_path, const char *new_path) {
+  RESOLVE(link);
+  if (intercept_link("link", AT_FDCWD, old_path, AT_FDCWD, new_path))
+    return -1;
+  return real_link(old_path, new_path);
+}
+int linkat(int old_dir, const char *old_path, int new_dir,
+           const char *new_path, int flags) {
+  RESOLVE(linkat);
+  if (intercept_link("linkat", old_dir, old_path, new_dir, new_path))
+    return -1;
+  return real_linkat(old_dir, old_path, new_dir, new_path, flags);
 }
 ssize_t write(int fd, const void *buffer, size_t count) {
   RESOLVE(write);

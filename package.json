@@ -24,6 +24,7 @@
     "validate:native:aarch64": "node scripts/linux/native-aarch64-provenance-harness.mjs",
     "validate:linux:git": "node scripts/linux/git-candidate-harness.mjs",
     "validate:linux:persistence": "pnpm build && node scripts/linux/persistence-harness.mjs",
+    "validate:linux:approval": "pnpm build && node scripts/linux/phase3-approval-harness.mjs",
     "addon:context": "node addon/sync-context.mjs --check",
     "verify": "pnpm addon:context && pnpm format:check && pnpm lint && pnpm typecheck && pnpm build && pnpm test"
   },
