@@ -65,3 +65,27 @@ dedicated tmpfs no larger than 128 MiB:
 The tmpfs row deliberately fills and then cleans only the supplied bounded tmpfs.
 The harness compiles its inert fault shim and syscall probe at runtime; neither is
 copied into the add-on image.
+
+Run the isolated Phase 3 workflow proof of concept only as an unprivileged Linux
+user with equal real and effective UIDs, Node 22 through 24, `cc`, `readelf`, and
+`libcrypto.so.3` available:
+
+```sh
+pnpm validate:linux:phase3-poc -- --ack-disposable-phase3-poc
+```
+
+The acknowledgement is exact and the POC accepts no paths or retention option. It
+builds the normal repository `dist`, then creates private disposable state directly
+under canonical `/tmp` or `/var/tmp`, compiles and pins the three checked-in native
+helpers, and exercises success, rollback, and process-death recovery through the
+real inert Phase 3 components. The only fakes are the trusted verification probe,
+the reload catalog/service recorder, and the schema-limited domain-reload proposal
+fixture. It makes no Home Assistant, Supervisor, or network call.
+
+Evidence is manifest-first ordered JSONL with one mandatory cleanup row and exactly
+one summary. The SIGKILL row proves process death after a committed native helper
+result; it is not power-loss, production, or Home Assistant evidence. A topology,
+mount, identity, pending-artifact, substitution, or helper-absence uncertainty
+causes `cleanup_unproved`, preserves the workspace, and prevents a passing summary.
+Path cleanup cannot defeat a hostile same-UID transient swap-and-restore attack, so
+this disposable POC makes no production claim.
