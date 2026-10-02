@@ -879,6 +879,32 @@ A desktop MCP reconnect or app restart remains required before this chat can run
 the no-effect approval prompt. No approval was fabricated and no live config was
 changed. Source/deployment remain `0.2.3`; no runtime-code change was needed.
 
+### Restored connection and elicitation policy diagnosis
+
+The engineering inventory became available again without restarting the app.
+Desktop logs record this chat's server ready at `2026-10-02T20:05:25Z`, with further
+ready events at `20:05:27Z` and `20:05:32Z`. Registered system info passed, request
+ID `83c52ba5-c0fd-4a8b-8dd5-c3337c3e3fd9`, Core `2026.9.4` `RUNNING`.
+
+The actual current-chat harmless approval check returned `approval_declined`,
+request ID `3fd08c4f-9cd7-4d2e-9d99-0ff04ad3dff0`. The owner explicitly reported
+that **no prompt appeared**; this must not be described as a human refusal or
+successful UI acceptance. The local Codex config was `approval_policy = "never"`.
+The official configuration reference documents
+`approval_policy.granular.mcp_elicitations = true` to allow prompts rather than
+auto-reject them; this is a concrete policy explanation consistent with the result,
+not proof that every client rendering boundary is now working.
+
+To implement the owner's requested human MCP approvals without an app restart,
+the config was changed to granular policy with **only** `mcp_elicitations: true`;
+sandbox, rules, permission-request and skill approval categories remain false.
+`approvals_reviewer = "user"` was already configured. The other running agent was
+not interrupted. An immediate check in the same already-running turn still returned
+`approval_declined`, request ID `ca764026-b786-4d5c-a610-8c6f99e63e47`; that turn
+was started under the old `never` policy. A subsequent turn must prove that the
+new setting takes effect and the user receives the no-effect prompt. Do not claim
+human approval or apply a proposal until then. No live HA configuration changed.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

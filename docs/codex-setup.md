@@ -38,6 +38,20 @@ Run `ha_check_approval`; it requests a harmless exact confirmation and changes n
 Home Assistant state. This host must advertise MCP form elicitation and display
 the prompt. Unsupported clients cannot apply proposals.
 
+Codex must also permit MCP elicitation in its approval policy. A `never` policy can
+silently decline the prompt even when the client advertises form support. To allow
+human MCP prompts while retaining disabled command/permission approval categories,
+the documented configuration is:
+
+```toml
+approval_policy = { granular = { sandbox_approval = false, rules = false, mcp_elicitations = true, request_permissions = false, skill_approval = false } }
+approvals_reviewer = "user"
+```
+
+This config change does not establish that an already-running turn adopted it.
+Check the next turn's effective behavior using the harmless tool before a live apply.
+See the [official configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+
 `ha_apply_proposal` accepts only a proposal ID. It shows the exact redacted diff
 and proposal identity through the client's approval UI, then requires an exact
 typed confirmation. Approval booleans, approver names and grant IDs in tool input
