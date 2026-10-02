@@ -48,8 +48,12 @@ approval_policy = { granular = { sandbox_approval = false, rules = false, mcp_el
 approvals_reviewer = "user"
 ```
 
-This config change does not establish that an already-running turn adopted it.
-Check the next turn's effective behavior using the harmless tool before a live apply.
+Changing the config file alone does not select it for an existing chat. In the
+desktop app, use the permissions control below this chat's composer and select
+**Custom (config.toml)**. If that mode is unavailable, **Ask for approval** is the
+documented human-review mode. Available modes depend on local and organization
+settings. See the [official permissions guide](https://learn.chatgpt.com/docs/permission-modes).
+Then check the effective behavior using the harmless tool before a live apply.
 See the [official configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
 
 `ha_apply_proposal` accepts only a proposal ID. It shows the exact redacted diff

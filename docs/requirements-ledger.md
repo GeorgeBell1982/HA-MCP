@@ -905,6 +905,19 @@ was started under the old `never` policy. A subsequent turn must prove that the
 new setting takes effect and the user receives the no-effect prompt. Do not claim
 human approval or apply a proposal until then. No live HA configuration changed.
 
+The subsequent turn still had effective approval policy `never`; its harmless
+check returned `approval_declined`, request ID
+`47c43cfb-d722-47e8-8580-d602b5c11d06`. Therefore a new turn alone did not adopt
+the edited disk policy. The earlier expectation that the next turn would do so
+was corrected. The official
+[permissions guide](https://learn.chatgpt.com/docs/permission-modes) explains that
+making a mode available does not select it or change an existing chat, and places
+the desktop permissions control below the composer. The next required owner
+action is to select **Custom (config.toml)** for this chat, or the documented
+**Ask for approval** mode if Custom is unavailable. This selection and actual
+human prompt acceptance remain unverified. No desktop restart, interruption of
+the other agent, fabricated approval, or live HA apply was performed.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

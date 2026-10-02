@@ -23,8 +23,10 @@ and deployed acceptance evidence are recorded separately in the ledger. This
 supersedes the historical terminal-only MCP restriction described below. All 1,373
 tests and 27 disposable native/real HA checks on amd64 and Pi arm64 passed, and
 independent review approved the change. Installed health and 29-tool inventory
-passed; unsupported hosts refuse approval. The current chat's tool inventory must
-refresh/reconnect before its no-effect approval prompt can be tested. No live
+passed; unsupported hosts refuse approval. The current chat's inventory has
+reconnected, but its active `never` approval policy still automatically declines
+the harmless check. The prepared granular config must be selected through this
+chat's permissions control, then human prompt acceptance verified. No live
 proposal has been applied or authorized by the feature request.
 
 Phase 3 scope was narrowed following the independent proportionality review on the
