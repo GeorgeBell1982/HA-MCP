@@ -34,6 +34,9 @@ See [current-Core acceptance](requirements-ledger.md#current-core-202694-disposa
 for the updated immutable fixture and historical Git diagnosis boundary.
 See [native Pi acceptance](requirements-ledger.md#native-pi-read-only-packaging-acceptance-on-2026-10-02)
 for target hashes and the resolved SSH/Git/mount-check findings.
+The subsequent native Git matrix exposed an additional blocker: this Pi kernel
+has Landlock disabled, so the broker fails closed even with a disposable repository.
+See the [kernel compatibility evidence](requirements-ledger.md#native-pi-git-confinement-blocker-on-2026-10-02).
 Start with the
 [accepted review](requirements-ledger.md#phase-3-proportionality-review-and-scope-adjustment)
 and [revised Phase 3 plan](implementation-plan.md#phase-3-guarded-application) before

@@ -589,6 +589,37 @@ Remaining gates include full native Git/security/image-runner provenance,
 actual Pi HA/local human operator acceptance, a tested production backup and
 explicit write enablement. Process-kill checks do not prove power-cut durability.
 
+## Native Pi Git confinement blocker on 2026-10-02
+
+The unchanged 74-row Git candidate harness ran against the exact installed image
+in a separate bounded, network-disabled Pi container, using the packaged broker,
+Git and exact regular runtime closure:
+
+```sh
+node scripts/linux/git-candidate-harness.mjs --broker /app/native/git-broker --git /usr/bin/git --runtime-loader /lib/ld-musl-aarch64.so.1 --runtime-input /usr/lib/libpcre2-8.so.0.14.0 --runtime-input /usr/lib/libz.so.1.3.2
+```
+
+Result: `FAILED`, required/executed 74, passed 40, failed 34, exit one. All 30 normal
+repository states plus global/system/askpass hostile-environment cases exited
+125; the resource-limit observation row also failed. Earlier refusal cases do not
+establish successful Git confinement. A single disposable unborn-repository
+request traced the actual packaged broker: all five resource-limit calls succeeded,
+then `landlock_create_ruleset` returned `ENOSYS`, followed by exit 125 without
+output. Read-only host kernel configuration confirmed
+`# CONFIG_SECURITY_LANDLOCK is not set` on `6.18.39-haos-raspi`.
+
+Classification: target kernel incompatibility, not an ARM ABI or runtime-library
+failure. The broker deliberately fails closed when its required confinement is
+unavailable. Adding `.git` would not make Git operations work on this kernel.
+No fallback, weakened protection, kernel change or production restart was applied.
+Native Git/image acceptance remains blocked pending a supported kernel or a
+separately designed and reviewed equivalent confinement strategy.
+
+The diagnostic tracer was installed only in the disposable container, whose
+network was disconnected again before tracing. Ownership label was verified,
+`codex-native-git-mur82ytc` was removed, and a successful all-container inventory
+proved its name absent. No live configuration or Git repository was modified.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

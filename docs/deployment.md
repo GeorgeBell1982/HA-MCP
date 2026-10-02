@@ -86,6 +86,15 @@ still indicate unsupported topology/configuration or confinement/runtime failure
 the directory check alone cannot identify the cause. Configuration is not
 automatically initialized as a Git repository.
 
+The actual Pi kernel `6.18.39-haos-raspi` was checked on 2026-10-02 and has
+`CONFIG_SECURITY_LANDLOCK` disabled. The packaged Git broker requires Landlock;
+its native matrix failed because `landlock_create_ruleset` returned `ENOSYS`.
+Git therefore remains unavailable on this kernel even if a repository is created.
+Configuration inspection and proposal tools have separate boundaries. Do not
+disable broker confinement to bypass this refusal; a supported kernel or reviewed
+equivalent confinement is required. See the
+[native Git evidence](requirements-ledger.md#native-pi-git-confinement-blocker-on-2026-10-02).
+
 ## Live acceptance record: 2026-07-15
 
 The deployed add-on was version 0.1.4 on the actual HA OS/aarch64 target with Core 2026.7.2. The read-only bridge discovered all 15 tools; direct bridge and registered Codex MCP system-information calls passed, and bridge shutdown exited cleanly. System information, entity pagination, entity search/state, automation/script/helper/scene reads, expected dashboard/blueprint capability refusals, schema limits, and the absence of mutation-like tools passed. All calls returned request IDs through the fail-closed audit middleware; the audit file was not independently inspected.
