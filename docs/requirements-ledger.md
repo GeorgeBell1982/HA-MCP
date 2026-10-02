@@ -555,6 +555,40 @@ fixtures, and real ENOSPC on the fixture's private capped 32 MiB tmpfs. Harness
 state cleanup completed; the outer container remains only for the next POC check.
 Real power-cut durability and production write authority are not established.
 
+## Native Pi disposable workflow and cleanup on 2026-10-02
+
+The unchanged workflow POC ran in the same isolated installed-image fixture as
+UID/GID `65534`, with owned copies of the three C sources and harness files:
+
+```sh
+node scripts/linux/phase3-workflow-poc.mjs --ack-disposable-phase3-poc
+```
+
+All eight required rows executed and passed, exit zero: unprivileged Linux,
+private mount-safe workspace, helper provenance, success, rollback, true
+post-commit SIGKILL, fresh-process recovery, and proved cleanup. The native list,
+read and replace helper hashes exactly matched the installed package hashes
+recorded above. Recovery restored the checkpoint once, without proposal loading
+or candidate reapply; terminal state was `rollback_verification_succeeded`.
+The POC uses fixture proposals and fake HA boundaries, with zero HA/Supervisor
+calls. It supplements the separately recorded 24-row real HA amd64 workflow;
+it does not turn those rows into native Pi HA/operator evidence.
+
+After all three matrices, the outer container's ownership label was checked,
+then `codex-native-acceptance-mur7n0fe` was removed. A successful Docker all-container
+inventory confirmed its exact name absent and the production MCP/Core containers
+present. Compiler packages, shim, copied sources and temporary test storage were
+confined to that removed container. Docker inspection confirmed both production
+MCP and Core containers `running` with `State.Running=true`. The final read-only
+MCP system-info check returned HTTP `429` on both attempts; fresh application
+health was therefore not verified at closeout. No live configuration, key or
+approval state was changed. Native totals are 56 approval, 45 persistence and
+eight workflow rows.
+
+Remaining gates include full native Git/security/image-runner provenance,
+actual Pi HA/local human operator acceptance, a tested production backup and
+explicit write enablement. Process-kill checks do not prove power-cut durability.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

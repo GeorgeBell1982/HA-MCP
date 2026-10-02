@@ -24,8 +24,11 @@ the actual `/homeassistant/.git` directory is absent (`ENOENT` verified over SSH
 The 24-row disposable workflow now also passes against Core `2026.9.4`.
 Native Pi packaging/ABI checks passed over dedicated-key SSH: arm64 image/ELF
 helpers, root `555` artifacts, resolved linkage, operator import and read-only
-kernel mount/Node `EROFS` refusal. Complete native security/fault and Pi operator acceptance,
-backup and write enablement approval remain open. Custody/key extensions are
+kernel mount/Node `EROFS` refusal. Native Pi approval (56), persistence (45) and
+disposable workflow (eight) checks also passed; the isolated test container was
+removed with inventory proof. Full native Git/security/image-runner provenance,
+actual Pi HA/human operator acceptance, backup and write enablement approval remain
+open. Custody/key extensions are
 deferred research. See the [installed smoke evidence](requirements-ledger.md#installed-021-read-only-smoke-evidence-on-2026-10-02).
 See [current-Core acceptance](requirements-ledger.md#current-core-202694-disposable-acceptance-on-2026-10-02)
 for the updated immutable fixture and historical Git diagnosis boundary.

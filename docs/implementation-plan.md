@@ -105,8 +105,10 @@ Complete the following delivery gates in order:
    interruption recovery, and continued use across retention limits. All 24 owned
    HA/native/operator evidence rows passed, with proved container/volume cleanup.
    Authoritative verification passed 1,340 tests with 16 platform skips; independent
-   review approved the scoped implementation. Native aarch64 build/execution,
-   actual Pi operator acceptance, tested production backup, and explicit
+   review approved the scoped implementation. Native aarch64 packaging and the
+   56-row approval, 45-row persistence and eight-row disposable workflow matrices
+   now pass on the Pi. Full native security/provenance, actual Pi operator
+   acceptance, tested production backup, and explicit
    deployment/write approval remain open.
 
 Current-Core follow-up: the same 24-row disposable native/HA/operator workflow
@@ -114,8 +116,10 @@ passed against pinned Core `2026.9.4`, matching the installed Pi version. Source
 release `0.2.1` installation and read-only configuration/proposal checks are
 confirmed. Native Pi packaging/ABI availability, root-owned helpers, actual
 read-only mount and operator import are now verified over SSH; `.git` is absent,
-explaining the Git refusal. Complete native fault/security and actual Pi operator
-lifecycle evidence, backup and production write enablement remain gated.
+explaining the Git refusal. Native approval/persistence/disposable workflow checks
+passed and their owned test container was removed. Full native Git/security/image
+provenance and actual Pi HA/human operator lifecycle evidence, backup and
+production write enablement remain gated.
 See the requirements ledger for evidence and limitations.
 
 Freeze the separate approval custody helper, stale-stage remediation, key-sync
