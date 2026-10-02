@@ -705,6 +705,23 @@ Source changes in this slice affect disposable harnesses/documentation only;
 installed `0.2.1` needs no update for these checks. Production write enablement
 remains a separate explicit decision after backup and human acceptance readiness.
 
+## User-confirmed backup download on 2026-10-02
+
+The user's screenshots confirm a manual backup named `Manual test`, created
+October 2, 2026 at 19:41, displayed size 289.23 MB. Its restore inventory lists
+Home Assistant settings/history `2026.9.4`, SSL certificates, share folder and
+installed apps including Engineering MCP `0.2.1`. Its location is `This system`,
+marked encrypted. The phone notification reports `manual_test.tar` download
+complete. Backup creation and a downloaded copy outside the Pi are therefore
+user-evidenced; archive contents/integrity were not independently inspected.
+The empty checkboxes belong to the restore-selection screen and do not establish
+that components were excluded from the backup.
+
+Emergency-kit/encryption-key retention and a successful isolated restore test
+remain unverified. No restore, live configuration write or production enablement
+was performed or authorized by these screenshots. The screenshot attachments are
+kept outside version control; only this bounded factual record is committed.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.
