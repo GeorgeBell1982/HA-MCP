@@ -45,6 +45,49 @@ and pin; the running listener retains its old in-memory identity until restart.
 
 Repository builds and tests do not install or contact Home Assistant. Live acceptance is recorded separately below and never authorizes mutation or deployment.
 
+## Read-only Pi packaging checks for 0.2.1
+
+Run the following inside the **Engineering MCP add-on container**. A shell in a
+different Terminal/SSH add-on has a different filesystem and cannot validate these
+paths. The commands inspect runtime/artifact metadata and import the operator
+module; they do not initialize keys/state, approve proposals or change HA config.
+
+```sh
+set -eu
+uname -m
+node --version
+stat -c '%u:%g %a %n' /app/phase3-operator /app/native/git-broker /app/native/openat2-list /app/native/openat2-read /app/native/openat2-replace
+sha256sum /app/native/git-broker /app/native/openat2-list /app/native/openat2-read /app/native/openat2-replace
+ldd /app/native/openat2-replace
+node --input-type=module -e 'const m = await import("/app/dist/phase3/operatorRuntime.js"); if (typeof m.runPhase3OperatorCommand !== "function") process.exit(1); console.log("operator module available", process.arch);'
+if [ ! -d /homeassistant ]; then
+  echo 'config mount unavailable'
+elif [ -w /homeassistant ]; then
+  echo 'config mount writable: unexpected for 0.2.1'
+else
+  echo 'config mount read-only'
+fi
+if [ -d /homeassistant/.git ] && [ ! -L /homeassistant/.git ]; then
+  echo 'direct Git metadata directory present'
+else
+  echo 'direct Git metadata directory absent or unsupported'
+fi
+```
+
+Expected on the Pi: `aarch64`/`arm64`, a supported Node version, wrapper and four
+helpers owned by `0:0` with mode `555`, resolved loader/libcrypto linkage, importable
+operator composition, and a read-only configuration mount. Preserve the helper
+hashes as target evidence; amd64 helper hashes are not expected to match aarch64.
+This checks packaging availability, not the complete native security/fault matrix
+or a human-approved apply/recovery workflow.
+
+Git inspection requires a normal direct `.git` directory and supported local
+repository configuration. If it is absent, Git tools may refuse while configuration
+inspection and proposal tools work. If it exists, `repository_unavailable` can
+still indicate unsupported topology/configuration or confinement/runtime failure;
+the directory check alone cannot identify the cause. Configuration is not
+automatically initialized as a Git repository.
+
 ## Live acceptance record: 2026-07-15
 
 The deployed add-on was version 0.1.4 on the actual HA OS/aarch64 target with Core 2026.7.2. The read-only bridge discovered all 15 tools; direct bridge and registered Codex MCP system-information calls passed, and bridge shutdown exited cleanly. System information, entity pagination, entity search/state, automation/script/helper/scene reads, expected dashboard/blueprint capability refusals, schema limits, and the absence of mutation-like tools passed. All calls returned request IDs through the fail-closed audit middleware; the audit file was not independently inspected.

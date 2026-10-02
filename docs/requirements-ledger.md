@@ -424,6 +424,28 @@ uses the existing YAML diff code without executing the broker. Git initializatio
 or weakening confinement is not a prerequisite for that workflow and was not done.
 Confirmation of the Pi's Git setup is still pending from the user.
 
+The [read-only Pi packaging checklist](deployment.md#read-only-pi-packaging-checks-for-021)
+provides fixed commands for the actual add-on container: architecture/Node,
+root-owned helper/wrapper modes, target hashes, atomic-helper linkage, inert
+operator import, configuration mount writability and direct Git directory
+presence. The exact documented snippet was executed successfully against the
+network-disabled amd64 candidate image (with Linux line endings). It confirmed
+root `555` artifacts, resolved libcrypto and importable composition; its absent
+configuration mount was correctly reported unavailable, not misclassified as
+read-only. This is command/package verification, not Pi evidence. Actual container
+terminal access is still needed to execute the target checks; no keys/state were
+initialized and the user attachment was left untracked.
+
+The user then explicitly authorized attempting SSH while away from the PC. The
+recorded HA address `192.168.50.160` was checked on standard ports 22 and 22222;
+both TCP checks and strict-host-key, noninteractive SSH attempts were refused.
+The known MCP endpoint on port 8443 was reachable. No HA SSH profile or known-host
+entry exists in this desktop session; unrelated credentials were not used. No
+successful SSH authentication, host-key enrollment, SSH-service installation or
+production configuration change occurred. SSH/native container verification is
+blocked on enabling/reaching an authorized SSH endpoint or providing another
+actual add-on container terminal, not on the current-Core disposable workflow.
+
 Authoritative `CI=true pnpm.cmd verify` passed all 49 files: 1,340 tests passed,
 16 platform-gated skips; mirrors/context, formatting, lint, typecheck and build
 passed. Focused harness regression tests passed 2/2; scoped formatting/lint and
