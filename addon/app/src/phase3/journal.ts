@@ -550,6 +550,7 @@ export class DurablePhase3Journal implements Phase3JournalPort {
       previous.transactionId !== record.transactionId ||
       previous.proposalId !== record.proposalId ||
       previous.proposalStorageSha256 !== record.proposalStorageSha256 ||
+      previous.approvalGrantId !== record.approvalGrantId ||
       previous.path !== record.path ||
       previous.expectedSha256 !== record.expectedSha256 ||
       previous.candidateSha256 !== record.candidateSha256 ||
@@ -898,9 +899,12 @@ function privateOwner(metadata: { readonly uid: bigint }): boolean {
 }
 
 function canonicalRecordIdentity(record: Phase3TransactionRecord): boolean {
-  return [record.transactionId, record.proposalId, record.checkpointId].every(
-    (value) => lowercaseUuid.test(value),
-  );
+  return [
+    record.transactionId,
+    record.proposalId,
+    record.checkpointId,
+    ...(record.approvalGrantId === undefined ? [] : [record.approvalGrantId]),
+  ].every((value) => lowercaseUuid.test(value));
 }
 
 function sameIdentity(

@@ -285,6 +285,7 @@ export const phase3TransactionRecordSchema = z
     schemaVersion: z.literal(2),
     transactionId: z.string().uuid(),
     proposalId: z.string().uuid(),
+    approvalGrantId: z.string().uuid().optional(),
     proposalStorageSha256: sha256Schema,
     path: phase3CanonicalRelativePathSchema,
     expectedSha256: sha256Schema,
@@ -337,7 +338,7 @@ export const phase3JournalContract = deepFreeze({
   reconciliation:
     "exact transaction reads permit bounded compare-and-swap conflict reconciliation without weakening immutable identity",
   identity:
-    "transactionId, proposalId, proposalStorageSha256, path, expectedSha256, candidateSha256, diffSha256, checkpointId, checkpointSha256, impact, and reloadTarget are immutable",
+    "transactionId, proposalId, approvalGrantId when present, proposalStorageSha256, path, expectedSha256, candidateSha256, diffSha256, checkpointId, checkpointSha256, impact, and reloadTarget are immutable",
   rollbackReloadRequired:
     "rollbackReloadRequired starts false and can only change false-to-true on rollback_intent; it is not immutable identity",
   commitPoint:

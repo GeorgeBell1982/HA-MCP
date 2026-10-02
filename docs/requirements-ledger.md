@@ -206,6 +206,37 @@ passed. The final pinned Docker HA smoke passed all seven rows and removed its
 owned container/volume. Independent review approved after the inventory-size fix,
 passing 94 focused tests, mirror comparisons, and `git diff --check`.
 
+## Approval simplification decision and transaction linkage on 2026-10-02
+
+Independent design review recommended retaining `DurablePhase3ApprovalGrants`.
+Consumption currently precedes checkpoint creation and transaction intent;
+consolidation into the transaction journal would require another pre-intent record
+type or disrupt that order, plus replay lookup across archived state. The existing
+signed 120-second grant/receipt store already covers binding, one-time consumption,
+expiry, restart, and crash reconciliation. No replacement storage is being added.
+
+New intent records now contain the consumed `approvalGrantId`, retained through all
+transitions and immutable during journal replay/CAS reconciliation. The v2 schema
+keeps it optional so historical records remain readable; no grant linkage is invented
+for old records. The same 13 transaction states remain. Regression coverage rejects
+a canonically re-signed history that adds or changes approval identity.
+
+The next operator path is one local TTY review/confirmation followed immediately by
+grant issuance and coordinator apply; no MCP-controlled approver field or public
+grant-issuance endpoint is planned. Custody and key-sync research remain frozen.
+Whole-state offline retention is being assessed with terminal-state eligibility,
+replay protection, bounded archive storage, and interruption/resume requirements.
+No retention rotation, production key action, CLI composition, or enablement has
+occurred in this linkage slice.
+
+Linkage validation: authoritative `CI=true pnpm.cmd verify` passed 43 files,
+1,237 tests with 16 platform skips before the final canonical-UUID regression.
+The final coordinator/journal run passed 70 tests with three native skips.
+Independent review confirmed both contract/canonical-UUID corrections and passed
+91 coordinator/journal/operator cases with three skips. Present approval identity
+survives terminal transitions and restart; uppercase identity is refused before
+persistence. Root/add-on mirrors and `git diff --check` passed.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

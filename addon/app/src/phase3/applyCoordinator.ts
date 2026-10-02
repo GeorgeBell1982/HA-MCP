@@ -238,7 +238,7 @@ export class Phase3ApplyCoordinator {
             "Checkpoint metadata does not match the source digest",
           );
         const record = await this.ports.journal.createIntent(
-          this.intentRecord(proposal, checkpoint),
+          this.intentRecord(proposal, checkpoint, input.grantId),
         );
         const committed = await this.applyCandidate(record, candidate, context);
         return await this.finishPostCommit(committed, candidate, context);
@@ -719,12 +719,14 @@ export class Phase3ApplyCoordinator {
   private intentRecord(
     proposal: Phase3ProposalSnapshot,
     checkpoint: Readonly<{ checkpointId: string; checkpointSha256: string }>,
+    approvalGrantId: string,
   ): Phase3TransactionRecord {
     const now = new Date(this.now()).toISOString();
     return assertPhase3TransactionRecord({
       schemaVersion: 2,
       transactionId: randomUUID(),
       proposalId: proposal.proposalId,
+      approvalGrantId,
       proposalStorageSha256: proposal.proposalStorageSha256,
       path: proposal.path,
       expectedSha256: proposal.expectedSha256,
@@ -995,6 +997,7 @@ function sameTransactionIdentity(
   return (
     expected.transactionId === actual.transactionId &&
     expected.proposalId === actual.proposalId &&
+    expected.approvalGrantId === actual.approvalGrantId &&
     expected.proposalStorageSha256 === actual.proposalStorageSha256 &&
     expected.path === actual.path &&
     expected.expectedSha256 === actual.expectedSha256 &&

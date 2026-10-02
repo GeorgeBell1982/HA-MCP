@@ -82,6 +82,10 @@ Complete the following delivery gates in order:
    identity fields. Evaluate journal-backed approval consumption before adding any
    more bespoke storage. Keep current replay protection until a replacement proves
    expiry, exact binding, one-time use, crash recovery, and restart behavior.
+   The evaluation recommends retaining the tested grant/receipt store: consumption
+   precedes transaction intent, so consolidation would add a pre-intent record type
+   and archive replay lookup. New records link to the consumed grant ID without
+   changing the 13 states. Actual TTY approval/composition remains OPEN.
 5. Retention: provide supported archive/compaction for terminal transactions and
    associated checkpoints/approval evidence. Preserve nonterminal and manual
    recovery state; test restart and recovery across the retention boundary. Raising

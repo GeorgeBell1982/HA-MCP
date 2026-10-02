@@ -524,6 +524,7 @@ describe("Phase 3A apply coordinator", () => {
       context(),
     );
     expect(record.state).toBe("verification_succeeded");
+    expect(record.approvalGrantId).toBe(grant().grantId);
     expect(sha256(fake.live.bytes)).toBe(newSha);
     expect(log).toEqual([
       "proposal",

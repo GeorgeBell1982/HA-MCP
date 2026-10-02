@@ -73,7 +73,8 @@ describe("Phase 3C durable transaction journal", () => {
   it("persists legal transitions and terminal evidence across fresh instances", async () => {
     const root = await journalRoot();
     const journal = await initialized(root);
-    let current = await journal.createIntent(record(1));
+    const approvalGrantId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let current = await journal.createIntent({ ...record(1), approvalGrantId });
     for (const state of [
       "apply_committed",
       "post_validation_succeeded",
@@ -92,10 +93,23 @@ describe("Phase 3C durable transaction journal", () => {
       state: "verification_succeeded",
       version: 5,
       priorState: "reload_succeeded",
+      approvalGrantId,
     });
     expect((await restarted.listRecoverable())[0]?.state).toBe(
       "verification_succeeded",
     );
+  });
+
+  it("rejects noncanonical uppercase approval identity before persistence", async () => {
+    const root = await journalRoot();
+    const journal = await initialized(root);
+    await expect(
+      journal.createIntent({
+        ...record(1),
+        approvalGrantId: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+      }),
+    ).rejects.toThrow();
+    expect(await journal.listRecoverable()).toEqual([]);
   });
 
   it("restarts with exact latest evidence for every transaction state", async () => {
@@ -534,29 +548,34 @@ describe("Phase 3C durable transaction journal", () => {
     expect(await readdir(root)).not.toContain("quarantine");
   });
 
-  it("rejects a canonically re-signed immutable-history mutation", async () => {
-    const root = await journalRoot();
-    const journal = await initialized(root);
-    const initial = await journal.createIntent(record(1));
-    await journal.transition(initial.transactionId, 0, "apply_committed");
-    const entry = (await readdir(root)).find((name) =>
-      name.includes(".000000000001.entry"),
-    )!;
-    const path = join(root, entry);
-    const value = JSON.parse(await readFile(path, "utf8")) as {
-      schemaVersion: 2;
-      record: Phase3TransactionRecord;
-      recordSha256: string;
-    };
-    value.record.path = "scripts/tampered.yaml";
-    value.recordSha256 = sha256(
-      canonicalJson({ schemaVersion: 2, record: value.record }),
-    );
-    await writeFile(path, canonicalJson(value));
-    await expect(initialized(root)).rejects.toMatchObject({
-      code: "journal_unhealthy",
-    });
-  });
+  it.each(["path", "approvalGrantId"] as const)(
+    "rejects a canonically re-signed immutable-history mutation of %s",
+    async (field) => {
+      const root = await journalRoot();
+      const journal = await initialized(root);
+      const initial = await journal.createIntent(record(1));
+      await journal.transition(initial.transactionId, 0, "apply_committed");
+      const entry = (await readdir(root)).find((name) =>
+        name.includes(".000000000001.entry"),
+      )!;
+      const path = join(root, entry);
+      const value = JSON.parse(await readFile(path, "utf8")) as {
+        schemaVersion: 2;
+        record: Phase3TransactionRecord;
+        recordSha256: string;
+      };
+      if (field === "path") value.record.path = "scripts/tampered.yaml";
+      else
+        value.record.approvalGrantId = "22222222-2222-4222-8222-222222222222";
+      value.recordSha256 = sha256(
+        canonicalJson({ schemaVersion: 2, record: value.record }),
+      );
+      await writeFile(path, canonicalJson(value));
+      await expect(initialized(root)).rejects.toMatchObject({
+        code: "journal_unhealthy",
+      });
+    },
+  );
 
   it("rejects a canonically re-signed contextual reload bypass", async () => {
     const root = await journalRoot();
