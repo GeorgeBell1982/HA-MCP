@@ -196,7 +196,13 @@ Any uncertainty at or after exchange reports `commit_unknown` and preserves avai
 
 Phase 3G adds an unregistered `StrictYamlPhase3Validation` implementation of `Phase3ValidationPort`. It is an inert source-only validation adapter: it is not imported by runtime composition, not registered as a tool, not configured, not packaged differently, not mapped into the add-on, and does not enable writes or live Home Assistant mutation.
 
-The adapter accepts only the closed runtime phases `candidate_pre_apply`, `candidate_post_apply`, and `checkpoint_post_rollback`. Invalid runtime phases fail before boundary invocation with `invalid_phase`. Pre-cancelled or expired contexts fail before boundary invocation with the corresponding strict YAML gate code. Each accepted call copies caller bytes into an owned buffer, derives exactly one frozen Phase 2 operation context with fresh random UUID `requestId` and `operationId` plus the caller's exact `signal` and `deadlineAt`, invokes a narrow injected boundary that defaults to `validateStrictYaml`, and zeros the owned input in `finally`. Caller bytes are never modified.
+The adapter accepts only the closed runtime phases `checkpoint_pre_apply`, `candidate_pre_apply`, `candidate_post_apply`, and `checkpoint_post_rollback`. Invalid runtime phases fail before boundary invocation with `invalid_phase`. Pre-cancelled or expired contexts fail before boundary invocation with the corresponding strict YAML gate code. Each accepted call copies caller bytes into an owned buffer, derives exactly one frozen Phase 2 operation context with fresh random UUID `requestId` and `operationId` plus the caller's exact `signal` and `deadlineAt`, invokes a narrow injected boundary that defaults to `validateStrictYaml`, and zeros the owned input in `finally`. Caller bytes are never modified.
+
+The 2026-10-02 automation HA boundary adds pre-effect component validation for the
+exact checkpoint baseline and candidate, installed-config validation after effects,
+and exact loaded raw-configuration observation after reload. These adapters remain
+outside runtime composition. The disposable HA smoke and its limitations are
+recorded in the requirements ledger; the full guarded workflow gate remains open.
 
 Known `YamlGateError` failures are converted to `Phase3ValidationError` with the original gate-derived code, validation phase, sanitized finite positive line and column, and a stable bounded allowlisted message. `Phase3ValidationErrorCode` is derived from `YamlGateErrorCode` plus `invalid_phase`; the gate code list is not duplicated. Runtime bad byte values become `unsupported_encoding`. Unknown exceptions become `internal_failure` at line 1 column 1 and do not disclose raw content, paths, canaries, causes, or third-party messages.
 

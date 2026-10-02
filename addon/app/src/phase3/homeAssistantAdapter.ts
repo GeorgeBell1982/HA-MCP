@@ -60,6 +60,17 @@ export class HomeAssistantPhase3Client implements Phase3ReloadServicePort {
       throw failure("ha_configuration_invalid");
   }
 
+  async automationStates(context: Phase3OperationContext): Promise<unknown[]> {
+    const result = await this.request("/states", "GET", context);
+    if (!Array.isArray(result)) throw failure("ha_response_invalid");
+    return (result as unknown[]).filter(
+      (entry) =>
+        isObject(entry) &&
+        typeof entry.entity_id === "string" &&
+        entry.entity_id.startsWith("automation."),
+    );
+  }
+
   async reload(
     target: Phase3ReloadTarget,
     context: Phase3OperationContext,
@@ -82,7 +93,10 @@ export class HomeAssistantPhase3Client implements Phase3ReloadServicePort {
   }
 
   private async request(
-    path: "/config/core/check_config" | "/services/automation/reload",
+    path:
+      | "/config/core/check_config"
+      | "/services/automation/reload"
+      | "/states",
     method: "POST" | "GET",
     context: Phase3OperationContext,
   ): Promise<unknown> {
@@ -175,7 +189,10 @@ export class HomeAssistantPhase3Validation implements Phase3ValidationPort {
     context: Phase3OperationContext,
   ): Promise<void> {
     await this.yaml.validate(bytes, phase, context);
-    if (phase !== "candidate_pre_apply")
+    if (
+      phase === "candidate_post_apply" ||
+      phase === "checkpoint_post_rollback"
+    )
       await this.client.checkInstalledConfiguration(context);
   }
 }

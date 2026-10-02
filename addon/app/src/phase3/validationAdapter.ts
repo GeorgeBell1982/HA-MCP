@@ -12,6 +12,7 @@ import {
 } from "./applyCoordinator.js";
 
 export const phase3ValidationPhases = [
+  "checkpoint_pre_apply",
   "candidate_pre_apply",
   "candidate_post_apply",
   "checkpoint_post_rollback",

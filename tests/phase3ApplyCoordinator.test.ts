@@ -336,6 +336,21 @@ function expectRollbackTerminal(fake: ReturnType<typeof ports>): void {
 }
 
 describe("Phase 3A apply coordinator", () => {
+  it("rejects an invalid checkpoint baseline before approval or durable effects", async () => {
+    const log: string[] = [];
+    const fake = ports(log, { validationFailure: "checkpoint_pre_apply" });
+    await expect(
+      new Phase3ApplyCoordinator(fake).apply(
+        { proposalId: proposal().proposalId, grantId: grant().grantId },
+        context(),
+      ),
+    ).rejects.toThrow();
+    expect(log).toContain("validate:checkpoint_pre_apply:false");
+    expect(log).not.toContain("approval");
+    expect(log).not.toContain("checkpoint");
+    expect(fake.journal.transitions).toEqual([]);
+    expect(fake.sourceBuffer()?.every((byte) => byte === 0)).toBe(true);
+  });
   it("restores and revalidates the checkpoint when the HA HTTP validation rejects the installed candidate", async () => {
     const log: string[] = [];
     const fake = ports(log);
@@ -518,6 +533,7 @@ describe("Phase 3A apply coordinator", () => {
       "policy",
       "source",
       "candidate",
+      "validate:checkpoint_pre_apply:false",
       "validate:candidate_pre_apply:false",
       "approval",
       "checkpoint",

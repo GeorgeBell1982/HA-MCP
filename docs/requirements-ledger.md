@@ -150,6 +150,62 @@ regressions were added: caller abort/deadline after real HTTP headers with a sta
 reload body both preserve outcome-unknown and exactly one dispatch. The unused
 state endpoint was deferred to keep this slice small. `git diff --check` passed.
 
+## Automation component validation and loaded proof on 2026-10-02
+
+`HomeAssistantAutomationBoundary` uses fixed `validate_config` and
+`automation/config` WebSocket commands plus bounded REST state inventory against
+the trusted deployment endpoint.
+It accepts a plain automation list with unique string IDs/aliases, trigger/action
+sections, optional conditions/description/mode/boolean initial state; references,
+anchors, aliases, blueprints, variables, and other top-level options are refused.
+The class is bounded to 100 entries and 100 KB JSON per entry. Core validates each
+trigger/condition/action; negative, malformed, unavailable, or cancelled evidence
+fails closed. This does not execute actions or subscribe to triggers.
+
+The coordinator adds `checkpoint_pre_apply`: the exact source bytes already bound
+to the proposal are validated before candidate validation, approval consumption,
+checkpoint creation, or any effect. This prevents an unsupported/invalid rollback
+baseline from being accepted through a separate source reread. Source and candidate
+must both belong to the supported class.
+
+After reload, the probe rechecks source SHA, matches the complete automation
+inventory by unique ID and healthy on/off state, and compares every loaded raw
+configuration with canonical JSON from the expected file. It proves loaded
+configuration, not that action execution will succeed in every future circumstance.
+The existing verification adapter remains responsible for source-before/source-after
+binding. Per-operation WebSockets close on settlement and caller cancellation.
+The whole-instance state inventory is capped at 2,000,000 streamed bytes, matching
+the existing REST boundary's finite budget; larger deployments fail closed and
+require a separately reviewed observation strategy. Loaded per-automation WS replies
+remain bounded at 512 KB. Tests include 4,000 unrelated entities above the WS budget
+and oversized REST inventory rejection. This is not unlimited deployment support.
+
+The fixed protocol was verified against
+[Core 2026.7.2 WebSocket commands](https://github.com/home-assistant/core/blob/2026.7.2/homeassistant/components/websocket_api/commands.py)
+and [automation loaded-config implementation](https://github.com/home-assistant/core/blob/2026.7.2/homeassistant/components/automation/__init__.py).
+Core uses plural component keys, unlike the older singular examples in its developer
+documentation. Unsupported protocol versions fail closed; broader compatibility is
+not claimed.
+
+`scripts/linux/phase3-ha-boundary-smoke.mjs` requires its explicit disposable ACK,
+uses the official 2026.7.2 image pinned to
+`sha256:1476924357b46e80735c13e94232ba5c853cac052e9df4bb28d50fa56348097b`, creates only
+random named Docker volume/container fixtures with loopback HTTP, and creates
+temporary credentials in memory. It accepts no production endpoint, credential,
+container, or host directory. `finally` removes its container and volume. Build
+first, then run `node scripts/linux/phase3-ha-boundary-smoke.mjs --ack-disposable-ha-boundary-smoke`.
+
+This is a real HA boundary smoke with fixture source reads and direct writes to its
+owned test volume. Real proposal production, native atomic apply, durable journal /
+approval / checkpoint composition, process-kill recovery, retention, native aarch64,
+and production enablement remain separate gates. No runtime registration changed.
+
+Final validation: `CI=true pnpm.cmd verify` passed on Windows with 43 files,
+1,236 tests passed and 16 skipped; mirrors, formatting, lint, typecheck, and build
+passed. The final pinned Docker HA smoke passed all seven rows and removed its
+owned container/volume. Independent review approved after the inventory-size fix,
+passing 94 focused tests, mirror comparisons, and `git diff --check`.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

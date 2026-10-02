@@ -73,8 +73,11 @@ Complete the following delivery gates in order:
    disposable HA environment.
    Fixed HTTP installed-config validation/reload boundaries are isolated in
    source. Installed-config checks alone can miss filtered automation errors;
-   component validation, loaded-configuration proof, and disposable-HA acceptance
-   remain OPEN. No runtime composition or production write is enabled.
+   Component validation and exact loaded raw-configuration comparison are now
+   implemented in an isolated automation boundary. A pinned disposable HA smoke
+   covers semantic rejection, reload, stale loaded state, and restoration. Full
+   real-producer/native atomic/durable HA workflow acceptance remains OPEN.
+   No runtime composition or production write is enabled.
 4. Operator approval: add an explicit human approval path outside MCP-controlled
    identity fields. Evaluate journal-backed approval consumption before adding any
    more bespoke storage. Keep current replay protection until a replacement proves

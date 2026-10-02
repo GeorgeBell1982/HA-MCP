@@ -111,6 +111,7 @@ export interface Phase3ValidationPort {
   validate(
     bytes: Uint8Array,
     phase:
+      | "checkpoint_pre_apply"
       | "candidate_pre_apply"
       | "candidate_post_apply"
       | "checkpoint_post_rollback",
@@ -211,6 +212,11 @@ export class Phase3ApplyCoordinator {
             "candidate_digest_drift",
             "Candidate bytes do not match proposal identity",
           );
+        await this.ports.validation.validate(
+          source.bytes,
+          "checkpoint_pre_apply",
+          context,
+        );
         await this.ports.validation.validate(
           candidate,
           "candidate_pre_apply",

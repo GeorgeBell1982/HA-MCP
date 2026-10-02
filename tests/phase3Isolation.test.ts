@@ -40,6 +40,7 @@ const phase3Files = [
   "reloadAdapter.ts",
   "verificationAdapter.ts",
   "homeAssistantAdapter.ts",
+  "automationHaBoundary.ts",
 ] as const;
 
 const phase3NativeFiles = ["openat2-replace.c", "approval-custody.c"] as const;
@@ -91,6 +92,7 @@ describe("Phase 3A through Phase 3Q isolation", () => {
       expect(source).not.toContain("verificationAdapter");
       expect(source).not.toContain("phase3/verificationAdapter");
       expect(source).not.toContain("homeAssistantAdapter");
+      expect(source).not.toContain("automationHaBoundary");
       expect(source).not.toContain("openat2-replace");
       expect(source).not.toContain("durableApproval");
       expect(source).not.toContain("approvalCustody");
