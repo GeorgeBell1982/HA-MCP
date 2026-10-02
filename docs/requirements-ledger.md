@@ -531,6 +531,30 @@ coverage, real power-cut durability, or production write enablement. Native
 persistence/POC and full Git/image/provenance gates remain separately recorded.
 Documentation formatting and `git diff --check` passed for this evidence update.
 
+## Native Pi persistence fault matrix on 2026-10-02
+
+The unchanged persistence harness ran in the same isolated, network-disconnected
+native Pi fixture using the installed `0.2.1` runtime:
+
+```sh
+node scripts/linux/persistence-harness.mjs --cc /usr/bin/cc --tmpfs-root /fault-tmpfs
+```
+
+The first run passed 44/45 rows and failed `fixture:permissions`. This was a
+fixture setup error: `/fixture` was root-owned mode `0700`, so UID/GID `65534`
+could not load the worker script and never reached the application denial check.
+A separate unprivileged Node access check reproduced `EACCES` on that script.
+Changing only the owned fixture directory to `0755` allowed the unchanged full
+matrix to run: summary `PASSED`, required/executed `45`, no failed or unverified
+rows, exit zero. The permission row then reported the expected latched refusal,
+`Protected proposal directory is unsafe`. No application or harness code changed.
+
+Evidence covers proposal/journal/audit persistence and rotation/quarantine faults,
+13 syscall-shim checks, three true process-kill boundaries, unsafe filesystem
+fixtures, and real ENOSPC on the fixture's private capped 32 MiB tmpfs. Harness
+state cleanup completed; the outer container remains only for the next POC check.
+Real power-cut durability and production write authority are not established.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.
