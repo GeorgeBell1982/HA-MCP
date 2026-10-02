@@ -118,6 +118,38 @@ passed and 16 skipped; mirrors, formatting, lint, typecheck, and build passed.
 Independent follow-up review approved the slice and passed 106 focused tests plus
 mirror comparison and `git diff --check`. Native and HA acceptance remain open.
 
+## Isolated HA HTTP boundaries on 2026-10-02
+
+`HomeAssistantPhase3Client` adds fixed installed-config validation, automation
+and reload endpoints. It preserves the Supervisor
+Core proxy prefix, snapshots the trusted endpoint/credential, refuses redirects,
+bounds streamed response bytes, and respects caller cancellation/deadlines. Reload
+is attempted once; errors after attempted dispatch are outcome-unknown. Invalid
+configuration/error/warning replies fail with fixed messages without upstream text.
+`HomeAssistantPhase3Validation` retains strict YAML prechecks and checks the installed
+configuration after apply and after checkpoint restoration. A coordinator regression
+proves HTTP rejection triggers restoration and revalidation using test boundaries.
+
+This is PARTIAL HA integration. The endpoint checks installed files, not a staged
+candidate. Core may filter invalid automations inside its domain validator, so a
+`valid` response alone is insufficient automation semantic proof. Actual automation
+component validation and a loaded-configuration probe remain required. No MCP tool,
+runtime composition, write enablement, or production access was added. Real HTTP
+tests use a local fixture server; this is not disposable-HA acceptance.
+
+API reference: [HA REST API](https://developers.home-assistant.io/docs/api/rest/).
+The installed-config limitation was checked against
+[Core 2026.7.2 check_config](https://github.com/home-assistant/core/blob/2026.7.2/homeassistant/helpers/check_config.py)
+and the automation validator. Documentation examples and current Core protocols
+must be reconciled against the supported version before composition.
+
+Validation: `CI=true pnpm.cmd verify` passed on Windows with 42 files, 1,185 tests
+passed and 16 skipped; mirrors, formatting, lint, typecheck, and build passed.
+Independent review found no code defect and passed 65 focused tests. Its requested
+regressions were added: caller abort/deadline after real HTTP headers with a stalled
+reload body both preserve outcome-unknown and exactly one dispatch. The unused
+state endpoint was deferred to keep this slice small. `git diff --check` passed.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

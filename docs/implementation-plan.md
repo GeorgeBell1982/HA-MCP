@@ -71,6 +71,10 @@ Complete the following delivery gates in order:
    exact domain reload, and observable post-reload verification. YAML parsing and
    fake probes are insufficient. Invalid HA semantics must trigger rollback in a
    disposable HA environment.
+   Fixed HTTP installed-config validation/reload boundaries are isolated in
+   source. Installed-config checks alone can miss filtered automation errors;
+   component validation, loaded-configuration proof, and disposable-HA acceptance
+   remain OPEN. No runtime composition or production write is enabled.
 4. Operator approval: add an explicit human approval path outside MCP-controlled
    identity fields. Evaluate journal-backed approval consumption before adding any
    more bespoke storage. Keep current replay protection until a replacement proves

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { AutomationPhase3AdmissionPolicy } from "../src/phase3/reloadAdapter.js";
 import {
+  HomeAssistantPhase3Client,
+  HomeAssistantPhase3Validation,
+} from "../src/phase3/homeAssistantAdapter.js";
+import { loadConfig } from "../src/config.js";
+import {
   GuardedPhase3PolicyPort,
   InMemoryPhase3Journal,
   Phase3ApplyCoordinator,
@@ -331,6 +336,43 @@ function expectRollbackTerminal(fake: ReturnType<typeof ports>): void {
 }
 
 describe("Phase 3A apply coordinator", () => {
+  it("restores and revalidates the checkpoint when the HA HTTP validation rejects the installed candidate", async () => {
+    const log: string[] = [];
+    const fake = ports(log);
+    let calls = 0;
+    const client = new HomeAssistantPhase3Client(
+      loadConfig({
+        HA_BASE_URL: "http://localhost:8123",
+        HA_ACCESS_TOKEN: "test-only-token",
+      }),
+      async () => {
+        const candidate = ++calls === 1;
+        expect(sha256(fake.live.bytes)).toBe(candidate ? newSha : oldSha);
+        return new Response(
+          JSON.stringify(
+            candidate
+              ? { result: "invalid", errors: "private configuration details" }
+              : { result: "valid", errors: null },
+          ),
+        );
+      },
+    );
+    const result = await new Phase3ApplyCoordinator({
+      ...fake,
+      validation: new HomeAssistantPhase3Validation(client),
+    }).apply(
+      { proposalId: proposal().proposalId, grantId: grant().grantId },
+      context(),
+    );
+    expect(result.state).toBe("rollback_verification_succeeded");
+    expect(calls).toBe(2);
+    expect(fake.restoreCount()).toBe(1);
+    expect(sha256(fake.live.bytes)).toBe(oldSha);
+    expect(fake.journal.failureCodes).toContain("ha_configuration_invalid");
+    expect(JSON.stringify(result)).not.toContain(
+      "private configuration details",
+    );
+  });
   it("rejects topology drift inside the queue before creating durable effects", async () => {
     const log: string[] = [];
     const snapshot = proposal({ path: "automations.yaml" });
