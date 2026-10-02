@@ -620,6 +620,22 @@ network was disconnected again before tracing. Ownership label was verified,
 `codex-native-git-mur82ytc` was removed, and a successful all-container inventory
 proved its name absent. No live configuration or Git repository was modified.
 
+## Pi health and MCP reconnection follow-up on 2026-10-02
+
+The add-on's internal read-only `/health` endpoint returned HTTP 200 with
+`ok=true` and one paired client. A separate read-only request through its existing
+Supervisor Core API route returned version `2026.9.4`, state `RUNNING`; credentials
+remained in process memory and were not printed. The app process is configured for
+two sessions per paired client. Eight local bridge processes were observed, but
+this does not prove which sessions or limit caused the earlier HTTP 429 response.
+No limit, pairing, credential, service or production configuration was changed.
+
+The final registered MCP `ha_get_system_info` call then succeeded with `ok=true`,
+Core `2026.9.4` and state `RUNNING`, request ID
+`8b237319-88c4-4da9-af8c-9e664bf2720b`. This supersedes the earlier closeout's
+unverified MCP health check, while preserving its actual 429 failures. Connection
+availability recovered; the exact transient cause remains unclassified.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

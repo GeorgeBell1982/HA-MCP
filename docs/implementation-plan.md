@@ -119,7 +119,10 @@ read-only mount and operator import are now verified over SSH; `.git` is absent,
 explaining the Git refusal. Native approval/persistence/disposable workflow checks
 passed and their owned test container was removed. Full native Git/security/image
 provenance and actual Pi HA/human operator lifecycle evidence, backup and
-production write enablement remain gated.
+production write enablement remain gated. The subsequent native Git matrix is
+blocked specifically by the Pi kernel's disabled Landlock support (`ENOSYS`);
+the broker's fail-closed protection remains intact. Adding Git metadata would not
+resolve that kernel incompatibility.
 See the requirements ledger for evidence and limitations.
 
 Freeze the separate approval custody helper, stale-stage remediation, key-sync
