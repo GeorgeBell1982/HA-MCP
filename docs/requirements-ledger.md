@@ -371,6 +371,28 @@ release metadata change. The preceding implementation's full 1,340-test and
 Supervisor acceptance await the user's installation. Publication does not install,
 restart, change configuration or access credentials on the production Pi.
 
+## Installed 0.2.1 read-only smoke evidence on 2026-10-02
+
+The user supplied a Home Assistant update screenshot showing installed/latest
+version `0.2.1`, up to date, after installing on the Pi. Fresh read-only MCP search
+independently confirmed `update.home_assistant_engineering_mcp_update` with
+installed/latest `0.2.1`, `in_progress: false`, and state `off`.
+
+Live `ha_get_system_info` and `ha_get_config_status` both returned `ok: true`,
+Core `2026.9.4`, state `RUNNING`, timezone `Africa/Johannesburg`. This supersedes
+the historical Core `2026.7.2` inventory, which remains the disposable workflow
+fixture version. `ha_list_config_files` returned five bounded metadata entries
+under `/homeassistant`; `ha_list_proposals` returned an empty readable store.
+`ha_get_git_status` refused with `repository_unavailable`; its cause is not proven
+and Git acceptance remains unresolved. No configuration contents, credentials or
+raw logs were saved, and no proposal creation, apply, reload or restart occurred.
+
+This establishes reported Pi installation and live read-only connectivity/config
+and proposal access. It does not establish native helper provenance/security-matrix
+acceptance, actual local operator execution, rollback/recovery, or compatibility of
+the write workflow with Core `2026.9.4`. Those gates and production write enablement
+remain open. The screenshot is a local user attachment, not a published artifact.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.
