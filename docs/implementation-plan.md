@@ -4,9 +4,11 @@ Risk: `HIGH`. This plan requires independent review before implementation. No ph
 
 Current context (2026-10-02): Phase 1 has historical live acceptance; Phase 2 is
 conditionally wired into source add-on `0.2.0`, with native aarch64 and live
-deployment gates still unverified in the retained record. Phase 3A through 3Q
-components and an isolated workflow POC are implemented but remain outside runtime
-composition. The phase descriptions and original approval points below are planning
+deployment gates still unverified in the retained record. The scoped Phase 3 local
+operator, audited recovery, bounded archive/resume, and disposable real-HA workflow
+are implemented and verified on Linux amd64. The packaged add-on mapping remains
+read-only; native aarch64 and production enablement remain gated. The phase
+descriptions and original approval points below are planning
 history; use the [current context](recovery.md#project-context-as-of-2026-10-02) and
 the requirements ledger to resume from the actual implementation boundary.
 
@@ -63,21 +65,24 @@ Complete the following delivery gates in order:
    class on 2026-10-02. The isolated admission policy and reload catalog now use the
    existing complete bounded include graph to reject transitive/hardlink sharing,
    bind source hashes, and recheck reachable sources/catalog. Runtime composition
-   and native/HA acceptance remain OPEN.
+   is now implemented in the explicit local operator and verified against real HA
+   with native Linux amd64 helpers. Native aarch64/live acceptance remains OPEN.
    Unsupported layouts and
    existing restart-required proposals retain their conservative classification;
-   live mapping/semantic revalidation remains part of the next HA-boundary gate.
+   actual Supervisor mapping and target validation remain deployment gates.
 3. Real HA boundaries: implement deployment-aware HA configuration validation,
    exact domain reload, and observable post-reload verification. YAML parsing and
-   fake probes are insufficient. Invalid HA semantics must trigger rollback in a
-   disposable HA environment.
+   fake probes are insufficient. Invalid candidate semantics must refuse before
+   effects; failures after replacement must restore and revalidate the checkpoint
+   in a disposable HA environment.
    Fixed HTTP installed-config validation/reload boundaries are isolated in
    source. Installed-config checks alone can miss filtered automation errors;
    Component validation and exact loaded raw-configuration comparison are now
    implemented in an isolated automation boundary. A pinned disposable HA smoke
    covers semantic rejection, reload, stale loaded state, and restoration. Full
-   real-producer/native atomic/durable HA workflow acceptance remains OPEN.
-   No runtime composition or production write is enabled.
+   real-producer/native atomic/durable HA workflow acceptance passed on Linux amd64,
+   including rollback and fresh-process recovery. Explicit local operator
+   composition is implemented; production writes remain disabled.
 4. Operator approval: add an explicit human approval path outside MCP-controlled
    identity fields. Evaluate journal-backed approval consumption before adding any
    more bespoke storage. Keep current replay protection until a replacement proves
@@ -85,14 +90,24 @@ Complete the following delivery gates in order:
    The evaluation recommends retaining the tested grant/receipt store: consumption
    precedes transaction intent, so consolidation would add a pre-intent record type
    and archive replay lookup. New records link to the consumed grant ID without
-   changing the 13 states. Actual TTY approval/composition remains OPEN.
+   changing the 13 states. Exact typed local TTY approval and audited recovery are
+   implemented and exercised through the actual wrapper/CLI in a disposable PTY.
+   This is automated terminal evidence, not a human acceptance session.
 5. Retention: provide supported archive/compaction for terminal transactions and
    associated checkpoints/approval evidence. Preserve nonterminal and manual
    recovery state; test restart and recovery across the retention boundary. Raising
-   the existing caps alone does not solve the lifecycle gap.
+   the existing caps alone does not solve the lifecycle gap. Implemented with one
+   transaction per epoch, finite preserved archives, fresh recovery/checkpoint/
+   receipt proof, durable interrupted-rotation resume, and tests beyond original
+   store lifetime caps. Archive export/removal is outside this delivery.
 6. Disposable HA evidence: demonstrate successful real-producer apply/reload,
    semantic-validation failure, reload/verification failure, rollback, process
-   interruption recovery, and continued use across retention limits.
+   interruption recovery, and continued use across retention limits. All 24 owned
+   HA/native/operator evidence rows passed, with proved container/volume cleanup.
+   Authoritative verification passed 1,340 tests with 16 platform skips; independent
+   review approved the scoped implementation. Native aarch64 build/execution,
+   actual Supervisor integration, tested production backup, and explicit
+   deployment/write approval remain open.
 
 Freeze the separate approval custody helper, stale-stage remediation, key-sync
 protocol, and hostile injected-object defenses as isolated research. They are not

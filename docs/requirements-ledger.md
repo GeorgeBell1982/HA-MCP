@@ -305,6 +305,59 @@ An attempted `linux/arm64` build failed executing `/bin/sh` with `exec format er
 on this amd64 host. No ARM emulation was installed; native aarch64 build and
 acceptance remain unverified, rather than counted as a passing target build.
 
+## Disposable full native/HA workflow acceptance on 2026-10-02
+
+The repository-owned acceptance command is:
+
+```sh
+node scripts/linux/phase3-ha-boundary-smoke.mjs --ack-disposable-ha-boundary-smoke --full-workflow
+```
+
+It accepts no endpoints, credentials or host paths. It creates owned Docker config
+and state volumes, onboards a disposable Core instance, holds its credential only
+in memory/stdin, compiles the exact native sources in an owned builder, and runs
+the current built application. Pinned Core image:
+`ghcr.io/home-assistant/home-assistant@sha256:1476924357b46e80735c13e94232ba5c853cac052e9df4bb28d50fa56348097b`.
+Pinned local builder image:
+`sha256:1c489404380cadf3a66d3440da070ce35ca3669cb8c8c9b56ee960834e236c04`.
+
+The final run passed all 24 rows and exited zero. Evidence includes the real
+protected proposal producer/store, topology admission, durable approval/journal/
+checkpoint stores, native atomic replacement, actual Core component validation,
+reload and exact loaded-configuration proof. Invalid components refuse before
+effects; dispatch uncertainty and probe failure restore, reload and prove the
+checkpoint. Three complete epoch archives preserve evidence and allow fresh use.
+A real child SIGKILL after durable rename and before apply-committed journaling is
+recovered by a fresh process/store against actual Core.
+
+Kernel evidence covers flock contention after helper exit, release, SIGKILL
+cleanup, and refusal on replaced lock/root identity or unsafe permissions. The
+actual fixed wrapper/CLI is exercised through a fixture PTY for typed approval,
+next-epoch refusal, rotation/continued apply, typed recovery and durable audit;
+non-TTY/`--yes` and existing-epoch missing-key bootstrap refuse. A separate owned
+worker mounts configuration read-only and proves apply/recovery refuse before
+grant/audit/source effects. All three owned containers and both owned volumes are
+removed and confirmed absent by successful exact-name inventory before the passing
+cleanup row. Cleanup attempts every owned name even after an ambiguous create
+failure; a daemon failure cannot count as absence. Final independent harness
+review also required a frozen complete evidence set: missing, duplicate, extra or
+failed worker rows now refuse, and full-workflow success requires exactly 24 rows.
+Regression coverage exercises both cleanup ambiguity and evidence completeness.
+Independent re-review returned APPROVED and passed both focused regression tests,
+syntax, scoped formatting/lint, and `git diff --check`. The final real Docker
+rerun after these fixes again passed all 24 rows with cleanup and exit zero.
+Final closeout `CI=true pnpm.cmd verify` passed all 49 files: 1,340 tests passed,
+16 platform-gated skips; mirrors/context, formatting, lint, typecheck and build
+passed. This supersedes the earlier local-operator batch's 1,338-test count.
+
+These are Linux amd64/root Docker and automated PTY results. A fixed loopback
+proxy preserves the Supervisor Core URL shape while forwarding only to owned Core;
+it does not prove actual Supervisor integration. Process-kill evidence does not
+prove power-loss durability. Native Raspberry Pi aarch64, actual human/operator
+acceptance, production backup/deployment and write enablement remain separate
+gates. No production token, HA data, mount or service was used or changed. Phase 4
+broader builders/deployments remain deferred scope.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

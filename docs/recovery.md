@@ -39,7 +39,19 @@ and proposal tools, and extensive isolated mutation foundations. Production
 configuration application is not enabled. This snapshot reconciles source and Git
 history with the existing contracts; it does not establish current live HA health.
 
-### Repository and target
+Latest scoped delivery evidence: authoritative verification passed 1,340 tests
+with 16 platform skips; independent review approved the implementation; the
+candidate image passed eight packaging rows and all 24 disposable HA/native/operator
+rows passed. See [full workflow acceptance](requirements-ledger.md#disposable-full-nativeha-workflow-acceptance-on-2026-10-02)
+for reproduction, image pins and limits. The attempted ARM64 build was blocked by
+`exec format error` on the amd64 host; use a native aarch64 environment for that
+remaining gate. Source commits/pushes are authorized by the user's continuation
+instruction, separately from deployment/write approval.
+
+The detailed inventory below is the initial historical resumption snapshot;
+references to July HEAD and its POC are not the latest delivered implementation.
+
+### Historical repository and target inventory
 
 - Checkout: `D:\Bellforge-software\Home Assistant`, branch `main`, reviewed HEAD
   `4e8e5527b049ddb3f1dc29f6819a2f4555afb633` dated 2026-07-25. The working tree was
@@ -94,7 +106,7 @@ The [Phase 3 contracts](phase3-contracts.md) and
 Phase 3Q. `tests/phase3Isolation.test.ts` enforces the runtime isolation boundary.
 There is no registered apply/reload/restart/commit tool or production adapter wiring.
 
-Latest commit `4e8e552` adds a repository-only workflow POC with its worker and
+Historical commit `4e8e552` adds a repository-only workflow POC with its worker and
 focused tests. Its eight mandatory evidence rows cover Linux/unprivileged
 environment, private workspace, helper provenance, success, rollback, commit-kill,
 restart recovery, and proved cleanup. The documented command is:
