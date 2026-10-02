@@ -1,3 +1,32 @@
+export function parseHaFixtureArguments(args) {
+  const ack = "--ack-disposable-ha-boundary-smoke";
+  if (args.length === 1 && args[0] === ack)
+    return { fullWorkflow: false, architecture: "amd64" };
+  if (args.length === 2 && args[0] === ack && args[1] === "--full-workflow")
+    return { fullWorkflow: true, architecture: "amd64" };
+  if (
+    args.length === 4 &&
+    args[0] === ack &&
+    args[1] === "--full-workflow" &&
+    args[2] === "--native-arm64-builder" &&
+    /^sha256:[a-f0-9]{64}$/u.test(args[3])
+  )
+    return { fullWorkflow: true, architecture: "arm64", builder: args[3] };
+  throw new Error("fixture_arguments_invalid");
+}
+
+export function assertFixtureArchitecture(images, daemon, expected) {
+  const normalized =
+    daemon === "aarch64" ? "arm64" : daemon === "x86_64" ? "amd64" : daemon;
+  if (
+    normalized !== expected ||
+    images.some(
+      (image) => image?.Os !== "linux" || image?.Architecture !== expected,
+    )
+  )
+    throw new Error("fixture_architecture_mismatch");
+}
+
 export const mainWorkerRows = Object.freeze([
   "native-kernel-lease-helper-exit-contention-release-and-sigkill",
   "native-kernel-lease-lock-root-replacement-and-unsafe-mode-refused",

@@ -636,6 +636,55 @@ Core `2026.9.4` and state `RUNNING`, request ID
 unverified MCP health check, while preserving its actual 429 failures. Connection
 availability recovered; the exact transient cause remains unclassified.
 
+## Native Pi real HA workflow on 2026-10-02
+
+The real HA harness now supports an explicit native ARM mode without adding new
+workflow rows or production endpoints. It requires the exact disposable ACK/full
+option and an immutable builder image ID; Linux/arm64 Node, matching Linux image
+architectures and an arm64 Docker daemon are checked before fixture creation.
+The official Core `2026.9.4` arm64 manifest is pinned to
+`sha256:35e6df56a9ce632c9b15df869ac73a17af6cdd2cfb99830527ffac9cc5218ba2`.
+Each named fixture container is limited to two CPUs, 1536 MiB/no additional swap
+and 256 PIDs. The exact 24-row manifest and affirmative daemon cleanup remain.
+
+On the actual Pi, the disposable builder was derived from the installed `0.2.1`
+image ID recorded above, using its dependencies, pinned GCC/musl/Linux-header
+packages, Docker CLI `28.3.3-r5`, and only the bounded local build/source/harness
+files. Dependency/native directory layout was prepared in the fixture image.
+Its frozen image ID was
+`sha256:0d2687a7604609d40621ec09276dc2db95e4fcc727a35d36c42b7553ecf232c3`.
+The outer runner had host networking and Docker socket access solely to execute
+the reviewed harness; no live config/data mounts or Supervisor credentials were
+supplied. Workers had only owned fixture volumes and no Docker socket.
+
+```sh
+node scripts/linux/phase3-ha-boundary-smoke.mjs --ack-disposable-ha-boundary-smoke --full-workflow --native-arm64-builder sha256:0d2687a7604609d40621ec09276dc2db95e4fcc727a35d36c42b7553ecf232c3
+```
+
+All 24 required rows passed with exit zero: real semantic validation, native
+apply/exact reload/loaded proof, post-commit failure rollback, kernel lease
+contention/tamper/SIGKILL, fresh-process recovery, retention, actual packaged
+wrapper commands through automated PTY, and read-only mount refusal. This uses
+an owned real HA instance and fixture Supervisor-shaped proxy; it does not claim
+actual production Supervisor/operator acceptance or human authorization.
+The independent read-only review found no blocker in the ARM extension. It noted
+the pre-existing unnamed `--rm` setup-container timeout uncertainty and the need
+for host provenance beyond architecture checks.
+
+Harness cleanup passed; a separate successful Pi container/volume inventory
+confirmed the outer runner and all nonce-owned fixtures absent. The temporary
+builder tag/image was removed. Desktop OS-temp Dockerfile/tar cleanup was blocked
+by automatic policy review, including the narrowed explicit-file removal attempt;
+those non-secret files remain outside the repository at
+`C:/Users/jora4/AppData/Local/Temp/codex-native-ha-mur8j7ud`.
+No live state changed. Authoritative `CI=true pnpm verify` passed 49 files,
+1341 tests with 16 platform skips, including the new argument/architecture
+regression. Native Git remains blocked by the kernel's disabled Landlock; tested
+backup, actual human operator acceptance and explicit production write enablement
+remain separate gates.
+The unchanged default amd64 path also passed all 24 rows after the ARM extension,
+with cleanup proved and exit zero.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

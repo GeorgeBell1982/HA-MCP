@@ -5,6 +5,32 @@ import { expect, it } from "vitest";
 
 const execute = promisify(execFile);
 
+it("requires explicit native acknowledgement, an immutable builder, and matching image/daemon architectures", async () => {
+  const moduleUrl = new URL(
+    "../scripts/linux/phase3-ha-evidence.mjs",
+    import.meta.url,
+  ).href;
+  await execute(process.execPath, [
+    "--input-type=module",
+    "-e",
+    `
+import assert from "node:assert/strict";
+import { parseHaFixtureArguments as parse, assertFixtureArchitecture as check } from ${JSON.stringify(moduleUrl)};
+const ack = "--ack-disposable-ha-boundary-smoke";
+const digest = "sha256:" + "a".repeat(64);
+assert.equal(parse([ack]).fullWorkflow, false);
+assert.equal(parse([ack, "--full-workflow"]).architecture, "amd64");
+assert.deepEqual(parse([ack, "--full-workflow", "--native-arm64-builder", digest]), { fullWorkflow: true, architecture: "arm64", builder: digest });
+for (const args of [[], [ack, "--native-arm64-builder", digest], [ack, "--full-workflow", "--native-arm64-builder", "latest"], [ack, "--full-workflow", "--native-arm64-builder", digest, "extra"]]) assert.throws(() => parse(args));
+const arm = {Os: "linux", Architecture: "arm64"};
+check([arm, arm], "aarch64", "arm64");
+check([{Os: "linux", Architecture: "amd64"}], "x86_64", "amd64");
+for (const images of [[arm, {Os: "linux", Architecture: "amd64"}], [undefined], [{Os: "windows", Architecture: "arm64"}]]) assert.throws(() => check(images, "arm64", "arm64"));
+assert.throws(() => check([arm], "amd64", "arm64"));
+`,
+  ]);
+});
+
 it("requires every exact acceptance row and rejects missing, duplicate, extra or failed evidence", async () => {
   const moduleUrl = new URL(
     "../scripts/linux/phase3-ha-evidence.mjs",
@@ -47,7 +73,8 @@ const present = new Set();
 childProcess.spawnSync = (_command, args) => {
   process.stdout.write("FAKE " + JSON.stringify(args) + "\\n");
   const result = (status, stdout = "") => ({status, stdout, stderr: "", signal: null});
-  if (args[0] === "image") return result(0, "[]");
+  if (args[0] === "image") return result(0, JSON.stringify([{Os: "linux", Architecture: "amd64"}]));
+  if (args[0] === "info") return result(0, "x86_64");
   if (args[0] === "volume" && args[1] === "create") {
     present.add(args[2]);
     return result(1);

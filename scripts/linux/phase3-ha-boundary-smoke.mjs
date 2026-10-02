@@ -12,23 +12,25 @@ import {
   mainWorkerRows,
   readonlyWorkerRows,
   parseWorkerRows,
+  parseHaFixtureArguments,
+  assertFixtureArchitecture,
 } from "./phase3-ha-evidence.mjs";
 
 // Docker-only fixture. Never accepts an endpoint, credential, host directory or
 // production container. Temporary credentials remain in memory and are destroyed
 // with the owned volume. Native evidence requires the explicit full option.
-const fullWorkflow =
-  process.argv.slice(2).join(" ") ===
-  "--ack-disposable-ha-boundary-smoke --full-workflow";
-if (
-  !fullWorkflow &&
-  process.argv.slice(2).join(" ") !== "--ack-disposable-ha-boundary-smoke"
-) {
+let options;
+try {
+  options = parseHaFixtureArguments(process.argv.slice(2));
+} catch {
   process.stderr.write("Required: --ack-disposable-ha-boundary-smoke\n");
   process.exit(64);
 }
+const { fullWorkflow, architecture } = options;
 const image =
-  "ghcr.io/home-assistant/home-assistant@sha256:e47c978e1b801466e7f62f612fd552bc3a228e077b31a3f1c22c05cf63d754da";
+  architecture === "arm64"
+    ? "ghcr.io/home-assistant/home-assistant@sha256:35e6df56a9ce632c9b15df869ac73a17af6cdd2cfb99830527ffac9cc5218ba2"
+    : "ghcr.io/home-assistant/home-assistant@sha256:e47c978e1b801466e7f62f612fd552bc3a228e077b31a3f1c22c05cf63d754da";
 const name = `codex-ha-boundary-${randomUUID()}`;
 const volume = `${name}-config`;
 const workerName = `${name}-worker`;
@@ -36,7 +38,18 @@ const readonlyName = `${name}-readonly`;
 const stateVolume = `${name}-state`;
 const nonce = randomBytes(32).toString("hex");
 const builder =
+  options.builder ??
   "sha256:1c489404380cadf3a66d3440da070ce35ca3669cb8c8c9b56ee960834e236c04";
+const limits = [
+  "--cpus",
+  "2",
+  "--memory",
+  "1536m",
+  "--memory-swap",
+  "1536m",
+  "--pids-limit",
+  "256",
+];
 const original = Buffer.from(
   "- id: codex_disposable_proof\n  alias: Disposable proof\n  triggers:\n    - trigger: event\n      event_type: codex_disposable_never_fired\n  conditions: []\n  actions:\n    - delay: 0\n",
 );
@@ -92,8 +105,19 @@ function install(next) {
 try {
   // Inspect requires locally available exact images; no implicit pull or tag
   // upgrade can enter this evidence run.
-  docker("image", "inspect", image);
-  if (fullWorkflow) docker("image", "inspect", builder);
+  if (
+    architecture === "arm64" &&
+    (process.platform !== "linux" || process.arch !== "arm64")
+  )
+    throw new Error("native_runner_required");
+  const images = [JSON.parse(docker("image", "inspect", image))[0]];
+  if (fullWorkflow)
+    images.push(JSON.parse(docker("image", "inspect", builder))[0]);
+  assertFixtureArchitecture(
+    images,
+    docker("info", "--format", "{{.Architecture}}"),
+    architecture,
+  );
   docker("volume", "create", volume);
   const setup =
     "from pathlib import Path; import sys; Path('/config/configuration.yaml').write_text(sys.argv[1]); Path('/config/automations.yaml').write_text(sys.argv[2]); Path('/config/secrets.yaml').write_text('{}\\n'); Path('/config/.codex-fixture').write_text(sys.argv[3])";
@@ -113,6 +137,7 @@ try {
   );
   docker(
     "create",
+    ...limits,
     "--name",
     name,
     "--publish",
@@ -248,6 +273,7 @@ try {
     docker("volume", "create", stateVolume);
     docker(
       "create",
+      ...limits,
       "--name",
       workerName,
       "--network",
@@ -360,6 +386,7 @@ try {
       throw new Error("native_workflow_failed");
     docker(
       "create",
+      ...limits,
       "--name",
       readonlyName,
       "--network",

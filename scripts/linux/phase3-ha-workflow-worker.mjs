@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Disposable Linux amd64 acceptance only. Approval issuance is a fixture;
+// Disposable Linux acceptance only. Approval issuance is a fixture;
 // interactive operator approval has separate acceptance coverage.
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";

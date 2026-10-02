@@ -66,7 +66,7 @@ Complete the following delivery gates in order:
    existing complete bounded include graph to reject transitive/hardlink sharing,
    bind source hashes, and recheck reachable sources/catalog. Runtime composition
    is now implemented in the explicit local operator and verified against real HA
-   with native Linux amd64 helpers. Native aarch64/live acceptance remains OPEN.
+   with native Linux amd64 and aarch64 helpers. Live production acceptance remains OPEN.
    Unsupported layouts and
    existing restart-required proposals retain their conservative classification;
    actual Supervisor mapping and target validation remain deployment gates.
@@ -107,7 +107,8 @@ Complete the following delivery gates in order:
    Authoritative verification passed 1,340 tests with 16 platform skips; independent
    review approved the scoped implementation. Native aarch64 packaging and the
    56-row approval, 45-row persistence and eight-row disposable workflow matrices
-   now pass on the Pi. Full native security/provenance, actual Pi operator
+   now pass on the Pi, along with all 24 real HA/native/operator fixture rows.
+   Full native Git/security/provenance, actual production Supervisor/human operator
    acceptance, tested production backup, and explicit
    deployment/write approval remain open.
 
@@ -118,7 +119,7 @@ confirmed. Native Pi packaging/ABI availability, root-owned helpers, actual
 read-only mount and operator import are now verified over SSH; `.git` is absent,
 explaining the Git refusal. Native approval/persistence/disposable workflow checks
 passed and their owned test container was removed. Full native Git/security/image
-provenance and actual Pi HA/human operator lifecycle evidence, backup and
+provenance and actual production Supervisor/human operator lifecycle evidence, backup and
 production write enablement remain gated. The subsequent native Git matrix is
 blocked specifically by the Pi kernel's disabled Landlock support (`ENOSYS`);
 the broker's fail-closed protection remains intact. Adding Git metadata would not

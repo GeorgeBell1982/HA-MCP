@@ -27,8 +27,11 @@ helpers, root `555` artifacts, resolved linkage, operator import and read-only
 kernel mount/Node `EROFS` refusal. Native Pi approval (56), persistence (45) and
 disposable workflow (eight) checks also passed; the isolated test container was
 removed with inventory proof. Full native Git/security/image-runner provenance,
-actual Pi HA/human operator acceptance, backup and write enablement approval remain
-open. Custody/key extensions are
+actual production Supervisor/human operator acceptance, backup and write enablement
+approval remain open. The full 24-row real HA/native/operator fixture now also
+passes on the Pi, with automated terminal confirmation and proved cleanup; see
+[native real HA workflow](requirements-ledger.md#native-pi-real-ha-workflow-on-2026-10-02).
+Custody/key extensions are
 deferred research. See the [installed smoke evidence](requirements-ledger.md#installed-021-read-only-smoke-evidence-on-2026-10-02).
 See [current-Core acceptance](requirements-ledger.md#current-core-202694-disposable-acceptance-on-2026-10-02)
 for the updated immutable fixture and historical Git diagnosis boundary.

@@ -89,3 +89,25 @@ mount, identity, pending-artifact, substitution, or helper-absence uncertainty
 causes `cleanup_unproved`, preserves the workspace, and prevents a passing summary.
 Path cleanup cannot defeat a hostile same-UID transient swap-and-restore attack, so
 this disposable POC makes no production claim.
+
+The real HA workflow supports both pinned Core `2026.9.4` architectures. Default
+execution remains the amd64 development fixture. Native ARM execution requires a
+Linux/arm64 Node process, an arm64 Docker daemon, the pinned official ARM Core
+image already present, and an explicitly supplied immutable arm64 builder ID:
+
+```sh
+node scripts/linux/phase3-ha-boundary-smoke.mjs --ack-disposable-ha-boundary-smoke --full-workflow --native-arm64-builder sha256:<64-lowercase-hex-image-id>
+```
+
+Prepare the disposable builder with Node, GCC/musl/Linux headers, libcrypto and
+`/build/native`, with dependencies at `/build/node_modules` and no existing
+`/app/node_modules`. The runner's working directory must contain built `dist`,
+the harness scripts, three native C sources and `addon/phase3-operator.sh`.
+The runner needs Docker access and access to the fixture's published loopback port.
+A containerized runner may use host networking and a Docker socket solely for
+the nonce-owned fixtures; this grants daemon control and must be restricted to
+the reviewed harness. Child workers receive no socket or live mounts/credentials.
+The three named fixture containers are capped at two CPUs, 1536 MiB/no additional
+swap and 256 PIDs each. All 24 acceptance rows and affirmative cleanup are required.
+Terminal confirmation is automated disposable evidence, not a human approval of
+production changes. Architecture checks do not replace external host provenance.
