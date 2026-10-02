@@ -36,11 +36,18 @@ Legacy records without a target remain canonical and readable. A legacy
 
 This is proposal-time metadata, not proof of current HA topology or semantic
 validity. Transitive sharing through unrelated include files is not inspected by
-this narrow classifier. A future live reload catalog must revalidate the mapping
-and reject unsupported/shared topology before dispatch; the apply admission/HA
-validation boundary must also reject unsafe topology before any live write. The
-real proposal-path delivery gate therefore remains OPEN for exclusivity and current
-mapping proof. Runtime writes remain disabled.
+this narrow producer classifier. The isolated `AutomationPhase3AdmissionPolicy`
+and `AutomationPhase3ReloadCatalog` now use
+`RepositoryResourceService.inspectAutomationReload` to expand the existing bounded
+include graph and require exactly one incoming reference to the automation inode,
+from the exact root automation include. This rejects indirect references and hardlink
+aliases. Every reachable source is reread with root/file identity, byte length, and
+digest checks, followed by exact catalog and protected-registry freshness checks.
+The admission policy also requires the proposal's original source hash before
+allowing coordinator effects; the reload catalog rechecks before dispatch. A single
+deployment must compose both with the shared queue. These observations do not lock
+external writers or prove HA semantics. Runtime composition and native/HA acceptance
+remain OPEN; runtime writes remain disabled.
 The producer-to-coordinator regression uses the real producer, audit, proposal
 store, adapter, policy, strict YAML validator, and narrow reload adapter, but fake
 filesystem reads and live-effect/HA boundaries. It proves local integration, not

@@ -43,7 +43,10 @@ export interface Phase3ProposalPort {
 }
 
 export interface Phase3PolicyPort {
-  evaluate(proposal: Phase3ProposalSnapshot): Promise<
+  evaluate(
+    proposal: Phase3ProposalSnapshot,
+    context?: Phase3OperationContext,
+  ): Promise<
     | { readonly allowed: true }
     | {
         readonly allowed: false;
@@ -181,14 +184,14 @@ export class Phase3ApplyCoordinator {
   ): Promise<Phase3TransactionRecord> {
     assertPrecommitActive(context);
     const first = await this.ports.proposals.load(input.proposalId);
-    await this.assertPolicy(first);
+    await this.assertPolicy(first, context);
     const canonicalPath = canonicalPhase3Path(first.path);
     const lease = await this.ports.locks.acquire(canonicalPath, context);
     try {
       assertPrecommitActive(context);
       const proposal = await this.ports.proposals.load(input.proposalId);
       this.assertSameProposal(first, proposal);
-      await this.assertPolicy(proposal);
+      await this.assertPolicy(proposal, context);
       const source = await this.ports.source.read(canonicalPath, context);
       let candidate: Uint8Array | undefined;
       try {
@@ -758,8 +761,11 @@ export class Phase3ApplyCoordinator {
       );
   }
 
-  private async assertPolicy(proposal: Phase3ProposalSnapshot): Promise<void> {
-    const decision = await this.ports.policy.evaluate(proposal);
+  private async assertPolicy(
+    proposal: Phase3ProposalSnapshot,
+    context: Phase3OperationContext,
+  ): Promise<void> {
+    const decision = await this.ports.policy.evaluate(proposal, context);
     if (!decision.allowed)
       throw new Phase3CoordinatorError(decision.code, decision.message);
   }

@@ -8,6 +8,7 @@ import {
 } from "../phase2Contracts.js";
 import {
   REPOSITORY_MAX_TOTAL_BYTES,
+  catalogsMatchExactly,
   RepositoryCursorCodec,
   type CatalogFile,
   type RepositoryCatalog,
@@ -148,6 +149,89 @@ export class RepositoryResourceService {
     private readonly protectedRegistry: ProtectedIdentityRegistry,
     private readonly cursors: RepositoryCursorCodec,
   ) {}
+
+  async inspectAutomationReload(context: Phase2OperationContext): Promise<
+    Readonly<{
+      supported: boolean;
+      sourceSha256: string | null;
+      snapshotSha256: string;
+    }>
+  > {
+    return this.sanitize(async () => {
+      const graph = await this.project("automation", context);
+      const configuration = graph.sources.get("configuration.yaml");
+      const automation = graph.sources.get("automations.yaml");
+      const root = configuration?.projection.root;
+      const entry =
+        root?.kind === "map"
+          ? root.entries.find((item) => item.key === "automation")
+          : undefined;
+      const incoming = automation
+        ? graph.edges.filter((edge) => {
+            const target = graph.sources.get(edge.target);
+            return (
+              target?.identity.device === automation.identity.device &&
+              target.identity.inode === automation.identity.inode
+            );
+          })
+        : [];
+      const supported =
+        root?.kind === "map" &&
+        configuration?.projection.metadata.aliasReferences === 0 &&
+        entry?.value?.kind === "include" &&
+        entry.value.tag === "!include" &&
+        entry.value.value === "automations.yaml" &&
+        !root.entries.some(
+          (item) =>
+            item.key !== "automation" && /^automation\s/u.test(item.key ?? ""),
+        ) &&
+        !root.entries.some(
+          (item) =>
+            item.key === "homeassistant" &&
+            (item.value?.kind !== "map" ||
+              item.value.entries.some((nested) => nested.key === "packages")),
+        ) &&
+        incoming.length === 1 &&
+        incoming[0]?.source === "configuration.yaml" &&
+        incoming[0]?.target === "automations.yaml" &&
+        incoming[0]?.tag === "!include";
+      // Bind every reachable include source, not just the root and edited file.
+      for (const source of graph.sources.values()) {
+        assertOperationActive(context);
+        const read = await this.reader.read(source.path, context);
+        try {
+          validateSecureRead(
+            graph.catalog.rootIdentity,
+            source.identity,
+            source.bytes,
+            read.rootIdentity,
+            read.identity,
+            read.bytes.byteLength,
+          );
+          if (digest(read.bytes) !== source.sha256)
+            throw boundary(
+              "stale_source",
+              "Automation topology source changed",
+            );
+        } finally {
+          read.bytes.fill(0);
+        }
+      }
+      if (
+        !catalogsMatchExactly(
+          graph.catalog,
+          await this.catalogs.catalog(context),
+        )
+      )
+        throw boundary("stale_source", "Automation topology catalog changed");
+      await this.protectedRegistry.assertFresh(context);
+      return Object.freeze({
+        supported: supported === true,
+        sourceSha256: automation?.sha256 ?? null,
+        snapshotSha256: graph.snapshotSha256,
+      });
+    });
+  }
 
   async list(
     input: {

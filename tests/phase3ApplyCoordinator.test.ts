@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AutomationPhase3AdmissionPolicy } from "../src/phase3/reloadAdapter.js";
 import {
   GuardedPhase3PolicyPort,
   InMemoryPhase3Journal,
@@ -330,6 +331,80 @@ function expectRollbackTerminal(fake: ReturnType<typeof ports>): void {
 }
 
 describe("Phase 3A apply coordinator", () => {
+  it("rejects topology drift inside the queue before creating durable effects", async () => {
+    const log: string[] = [];
+    const snapshot = proposal({ path: "automations.yaml" });
+    const fake = ports(log, { snapshots: [snapshot, snapshot] });
+    let inspections = 0;
+    const policy = new AutomationPhase3AdmissionPolicy(fake.policy, {
+      async inspectAutomationReload() {
+        return {
+          supported: ++inspections === 1,
+          sourceSha256: oldSha,
+          snapshotSha256: oldSha,
+        };
+      },
+    });
+    await expect(
+      new Phase3ApplyCoordinator({ ...fake, policy }).apply(
+        { proposalId: snapshot.proposalId, grantId: grant(snapshot).grantId },
+        context(),
+      ),
+    ).rejects.toMatchObject({ code: "automation_topology_changed" });
+    expect(inspections).toBe(2);
+    expect(log).not.toContain("source");
+    expect(log).not.toContain("checkpoint");
+    expect(fake.journal.transitions).toEqual([]);
+  });
+
+  it("cancels an in-queue topology inspection and releases the queue without effects", async () => {
+    const log: string[] = [];
+    const snapshot = proposal({ path: "automations.yaml" });
+    const fake = ports(log, { snapshots: [snapshot, snapshot] });
+    const controller = new AbortController();
+    const operation = context(controller);
+    let entered!: () => void;
+    const inspectionEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let inspections = 0;
+    const policy = new AutomationPhase3AdmissionPolicy(fake.policy, {
+      async inspectAutomationReload(active) {
+        expect(active.signal).toBe(operation.signal);
+        expect(active.deadlineAt).toBe(operation.deadlineAt);
+        if (++inspections === 2) {
+          entered();
+          await new Promise<void>((_, reject) =>
+            active.signal.addEventListener(
+              "abort",
+              () => reject(new Error("Cancelled")),
+              { once: true },
+            ),
+          );
+        }
+        return {
+          supported: true,
+          sourceSha256: oldSha,
+          snapshotSha256: oldSha,
+        };
+      },
+    });
+    const apply = new Phase3ApplyCoordinator({ ...fake, policy }).apply(
+      { proposalId: snapshot.proposalId, grantId: grant(snapshot).grantId },
+      operation,
+    );
+    const rejected = expect(apply).rejects.toMatchObject({
+      code: "operation_cancelled",
+    });
+    await inspectionEntered;
+    controller.abort();
+    await rejected;
+    const lease = await fake.locks.acquire("scripts.yaml", context());
+    lease.release();
+    expect(log).not.toContain("source");
+    expect(log).not.toContain("checkpoint");
+    expect(fake.journal.transitions).toEqual([]);
+  });
   it("holds the shared mutation queue through verification across different files", async () => {
     const locks = new Phase3ResourceLocks();
     const firstLog: string[] = [];

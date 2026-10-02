@@ -60,8 +60,10 @@ Complete the following delivery gates in order:
    supported target; exercise the real Phase 2 producer through the Phase 3 adapter
    and coordinator without POC impact overrides. Candidate metadata and local seam
    integration are implemented for the direct automation include and plain-list
-   class on 2026-10-02. Exclusivity/current-topology proof remains OPEN: the direct
-   classifier does not inspect transitive sharing through other domain includes.
+   class on 2026-10-02. The isolated admission policy and reload catalog now use the
+   existing complete bounded include graph to reject transitive/hardlink sharing,
+   bind source hashes, and recheck reachable sources/catalog. Runtime composition
+   and native/HA acceptance remain OPEN.
    Unsupported layouts and
    existing restart-required proposals retain their conservative classification;
    live mapping/semantic revalidation remains part of the next HA-boundary gate.

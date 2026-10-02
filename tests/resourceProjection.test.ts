@@ -23,6 +23,11 @@ import {
   type SecureFileRead,
   type SecureFileReader,
 } from "../src/security/repositoryBoundary.js";
+import {
+  AutomationPhase3AdmissionPolicy,
+  AutomationPhase3ReloadCatalog,
+} from "../src/phase3/reloadAdapter.js";
+import { GuardedPhase3PolicyPort } from "../src/phase3/applyCoordinator.js";
 
 const operation = (
   signal: AbortSignal = new AbortController().signal,
@@ -34,6 +39,104 @@ const operation = (
 });
 const identity = (inode: string): FileIdentity => ({ device: "1", inode });
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+
+describe("automation apply topology admission", () => {
+  const automation = "- id: example\n  alias: Example\n";
+  it("accepts the exclusive direct include with ordinary other domains", async () => {
+    const fixture = await serviceFixture({
+      "configuration.yaml":
+        "automation: !include automations.yaml\nscript: !include scripts.yaml\nscene: !include scenes.yaml\n",
+      "automations.yaml": automation,
+      "scripts.yaml": "{}\n",
+      "scenes.yaml": "[]\n",
+    });
+    const evidence = await fixture.service.inspectAutomationReload(operation());
+    expect(evidence).toMatchObject({
+      supported: true,
+      sourceSha256: sha(automation),
+    });
+    expect(Object.isFrozen(evidence)).toBe(true);
+    const catalog = new AutomationPhase3ReloadCatalog(fixture.service);
+    await expect(
+      catalog.resolve("automations.yaml", operation()),
+    ).resolves.toEqual({ status: "resolved", target: "automation.reload" });
+    const snapshot = {
+      proposalId: randomUUID(),
+      proposalStorageSha256: sha("stored"),
+      state: "pending" as const,
+      path: "automations.yaml",
+      expectedSha256: sha(automation),
+      candidateSha256: sha("candidate"),
+      diffSha256: sha("diff"),
+      risk: "high" as const,
+      impact: "domain_reload" as const,
+      reloadTarget: "automation.reload" as const,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    const policy = new AutomationPhase3AdmissionPolicy(
+      new GuardedPhase3PolicyPort({
+        writesEnabled: true,
+        applyCapability: true,
+        domainReloadCapability: true,
+      }),
+      fixture.service,
+    );
+    await expect(policy.evaluate(snapshot)).resolves.toEqual({ allowed: true });
+    await expect(
+      policy.evaluate({ ...snapshot, expectedSha256: sha("stale") }),
+    ).resolves.toMatchObject({ allowed: false });
+    await expect(
+      new AutomationPhase3AdmissionPolicy(
+        new GuardedPhase3PolicyPort(),
+        fixture.service,
+      ).evaluate(snapshot),
+    ).resolves.toMatchObject({ allowed: false, code: "writes_disabled" });
+  });
+  it.each([
+    ["transitive sharing", { "scenes.yaml": "!include automations.yaml\n" }],
+    [
+      "hardlink sharing",
+      { "scenes.yaml": { content: automation, inode: "automations.yaml" } },
+    ],
+  ])(
+    "rejects %s before admitting or dispatching reload",
+    async (_name, extra) => {
+      const fixture = await serviceFixture({
+        "configuration.yaml":
+          "automation: !include automations.yaml\nscene: !include scenes.yaml\n",
+        "automations.yaml": automation,
+        ...extra,
+      });
+      await expect(
+        fixture.service.inspectAutomationReload(operation()),
+      ).resolves.toMatchObject({ supported: false });
+      await expect(
+        new AutomationPhase3ReloadCatalog(fixture.service).resolve(
+          "automations.yaml",
+          operation(),
+        ),
+      ).resolves.toEqual({ status: "unavailable" });
+    },
+  );
+  it("detects same-size reachable-source drift on the verification read", async () => {
+    const fixture = await serviceFixture({
+      "configuration.yaml":
+        "automation: !include automations.yaml\nscript: !include scripts.yaml\n",
+      "automations.yaml": automation,
+      "scripts.yaml": "{}\n",
+    });
+    const original = fixture.reader.read.bind(fixture.reader);
+    let scriptsReads = 0;
+    vi.spyOn(fixture.reader, "read").mockImplementation(async (path) => {
+      if (path === "scripts.yaml" && ++scriptsReads === 2)
+        fixture.files.set(path, { content: "[]\n" });
+      return original(path);
+    });
+    await expect(
+      fixture.service.inspectAutomationReload(operation()),
+    ).rejects.toMatchObject({ code: "stale_source" });
+  });
+});
 
 interface FixtureFile {
   content: string;

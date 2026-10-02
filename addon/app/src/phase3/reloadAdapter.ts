@@ -1,10 +1,113 @@
 import {
+  type Phase3PolicyPort,
   Phase3CoordinatorError,
   type Phase3OperationContext,
   type Phase3ReloadPort,
 } from "./applyCoordinator.js";
 import { phase3ReloadTargets, type Phase3ReloadTarget } from "./contracts.js";
 import { canonicalPhase3Path } from "./resourceLocks.js";
+import { randomUUID } from "node:crypto";
+import type { RepositoryResourceService } from "../repository/resourceProjection.js";
+import type { Phase3ProposalSnapshot } from "./contracts.js";
+
+type AutomationTopologyReader = Pick<
+  RepositoryResourceService,
+  "inspectAutomationReload"
+>;
+
+export class AutomationPhase3AdmissionPolicy implements Phase3PolicyPort {
+  constructor(
+    private readonly base: Phase3PolicyPort,
+    private readonly resources: AutomationTopologyReader,
+  ) {}
+
+  async evaluate(
+    proposal: Phase3ProposalSnapshot,
+    context?: Phase3OperationContext,
+  ) {
+    const base = await this.base.evaluate(proposal, context);
+    if (!base.allowed) return base;
+    if (
+      proposal.path !== "automations.yaml" ||
+      proposal.impact !== "domain_reload" ||
+      proposal.reloadTarget !== "automation.reload"
+    )
+      return {
+        allowed: false as const,
+        code: "unsupported_automation",
+        message: "Only explicit automation reload proposals are supported",
+      };
+    try {
+      const evidence = await this.resources.inspectAutomationReload(
+        topologyContext(context),
+      );
+      if (
+        context?.signal.aborted ||
+        (context && Date.now() >= context.deadlineAt)
+      )
+        throw new Error("Inactive operation");
+      if (
+        !evidence.supported ||
+        evidence.sourceSha256 !== proposal.expectedSha256
+      )
+        return {
+          allowed: false as const,
+          code: "automation_topology_changed",
+          message: "Automation topology or source is unavailable or changed",
+        };
+      return { allowed: true as const };
+    } catch {
+      if (context?.signal.aborted)
+        return {
+          allowed: false as const,
+          code: "operation_cancelled",
+          message: "Operation was cancelled",
+        };
+      if (context && Date.now() >= context.deadlineAt)
+        return {
+          allowed: false as const,
+          code: "deadline_exceeded",
+          message: "Operation deadline exceeded",
+        };
+      return {
+        allowed: false as const,
+        code: "automation_topology_unhealthy",
+        message: "Automation topology could not be proved",
+      };
+    }
+  }
+}
+
+export class AutomationPhase3ReloadCatalog implements Phase3ReloadCatalogPort {
+  constructor(private readonly resources: AutomationTopologyReader) {}
+
+  async resolve(
+    path: string,
+    context: Phase3OperationContext,
+  ): Promise<Phase3ReloadResolution> {
+    if (path !== "automations.yaml")
+      return Object.freeze({ status: "unavailable" });
+    try {
+      const evidence = await this.resources.inspectAutomationReload(
+        topologyContext(context),
+      );
+      return evidence.supported
+        ? Object.freeze({ status: "resolved", target: "automation.reload" })
+        : Object.freeze({ status: "unavailable" });
+    } catch {
+      return Object.freeze({ status: "unhealthy" });
+    }
+  }
+}
+
+function topologyContext(context?: Phase3OperationContext) {
+  return {
+    requestId: randomUUID(),
+    operationId: randomUUID(),
+    signal: context?.signal ?? new AbortController().signal,
+    deadlineAt: context?.deadlineAt ?? Date.now() + 60_000,
+  };
+}
 
 export const phase3ReloadResolutionStatuses = Object.freeze([
   "resolved",

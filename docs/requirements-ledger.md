@@ -94,6 +94,30 @@ follow-up review returned `APPROVED` within the candidate-metadata scope, indepe
 passing 50 focused cases and `git diff --check`. Native Linux, live HA, actual
 include-graph admission, and prewrite HA semantic validation remain unverified.
 
+## Exclusive automation topology implementation on 2026-10-02
+
+The next isolated slice reuses the complete bounded repository include graph for
+pre-apply admission and pre-dispatch reload resolution. It rejects transitive and
+hardlink sharing, named automation roots/packages/aliases, stale proposal-source
+hashes, changed reachable-source bytes/identity, and catalog drift. All source
+verification buffers are wiped. The base policy's disabled-write and capability
+denials remain authoritative. No runtime registration or production effect is
+added. Tests cover standard script/scene includes, indirect sharing, hardlink
+sharing, same-size include drift, stale source, and disabled policy. Native/HA
+acceptance and composition remain open.
+
+The coordinator propagates caller cancellation and deadlines into both admission
+inspections. Regression coverage also checks cancellation releases the shared queue
+and topology drift on the second inspection denies before source reads/checkpoints.
+External editors remain outside the queue: the inspection and subsequent write are
+not atomic against external topology changes. Pre-dispatch reinspection and rollback
+contain failures; this slice does not establish external-writer exclusion.
+
+Validation: `CI=true pnpm.cmd verify` passed on Windows with 41 files, 1,164 tests
+passed and 16 skipped; mirrors, formatting, lint, typecheck, and build passed.
+Independent follow-up review approved the slice and passed 106 focused tests plus
+mirror comparison and `git diff --check`. Native and HA acceptance remain open.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.
