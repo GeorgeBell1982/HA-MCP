@@ -859,6 +859,26 @@ has **not** been tested. Refresh/reconnect of that inventory is the remaining
 acceptance step; the no-effect approval check must succeed here before applying a
 live proposal. No live config proposal, recovery or HA reload was performed.
 
+### Current-chat connection diagnosis on 2026-10-02
+
+After the owner asked to continue, this chat still exposed no engineering MCP
+tools. Desktop startup logs show the `home_assistant_engineering` connection
+failed with HTTP 429 at `2026-10-02T19:55:40Z`, followed by tool-discovery failures.
+The HTTP service has multiple bounded 429 gates; the log alone does not identify
+which one was reached. No limit was increased based on that inference.
+
+A fresh SDK client through the configured pinned bridge subsequently connected
+successfully and retrieved all 29 tools, including the harmless approval check.
+A client without form elicitation received `chat_approval_unavailable`, request ID
+`e62678fb-7565-4100-b016-93edd1c2f38f`. This distinguishes the live server/bridge
+from the desktop's failed connection state; it is not current-chat UI acceptance.
+The MCP configuration was toggled disabled/enabled with final state enabled, but
+the active chat inventory remained empty and no new ready event was observed.
+The available tools provide no operation to reset that running desktop connection.
+A desktop MCP reconnect or app restart remains required before this chat can run
+the no-effect approval prompt. No approval was fabricated and no live config was
+changed. Source/deployment remain `0.2.3`; no runtime-code change was needed.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.
