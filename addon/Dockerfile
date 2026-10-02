@@ -21,7 +21,8 @@ RUN set -eux; \
     cc ${NATIVE_CFLAGS} src/security/native/openat2-read.c ${NATIVE_LDFLAGS} -o /build/native/openat2-read; \
     cc ${NATIVE_CFLAGS} src/repository/native/openat2-list.c ${NATIVE_LDFLAGS} -o /build/native/openat2-list; \
     cc ${NATIVE_CFLAGS} src/git/native/git-broker.c ${NATIVE_LDFLAGS} -o /build/native/git-broker; \
-    file /build/native/openat2-read /build/native/openat2-list /build/native/git-broker
+    cc ${NATIVE_CFLAGS} src/phase3/native/openat2-replace.c ${NATIVE_LDFLAGS} -l:libcrypto.so.3 -o /build/native/openat2-replace; \
+    file /build/native/openat2-read /build/native/openat2-list /build/native/git-broker /build/native/openat2-replace
 
 FROM ${HA_BASE_FROM}
 RUN apk add --no-cache git=2.49.1-r0 nodejs=22.23.0-r0 openssl=3.5.7-r0
@@ -31,5 +32,6 @@ COPY --from=build build/node_modules ./node_modules
 COPY --from=build build/package.json ./package.json
 COPY --from=build --chown=0:0 --chmod=0555 /build/native/ /app/native/
 COPY run.sh /run.sh
+COPY --chown=0:0 --chmod=0555 phase3-operator.sh /app/phase3-operator
 RUN chmod 0755 /run.sh && mkdir -p /data/tls && chmod 0700 /data/tls
 CMD ["/run.sh"]

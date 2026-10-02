@@ -835,6 +835,61 @@ export class DurablePhase3ApprovalGrants implements Phase3ApprovalPort {
     });
   }
 
+  /** Authenticated fresh evidence for offline retention; never removes grants. */
+  retentionSummary(): Promise<{
+    readonly consumed: number;
+    readonly expired: number;
+    readonly liveUnused: number;
+  }> {
+    return this.run(async () => {
+      this.assertHealthy();
+      await this.refresh();
+      const now = this.trustedNow();
+      let consumed = 0;
+      let expired = 0;
+      let liveUnused = 0;
+      for (const stored of this.grants.values()) {
+        if (stored.receipt) consumed += 1;
+        else if (Date.parse(stored.grant.expiresAt) <= now) expired += 1;
+        else liveUnused += 1;
+      }
+      return Object.freeze({ consumed, expired, liveUnused });
+    });
+  }
+
+  /** The stored proposal hash binds its original risk; the journal does not repeat it. */
+  assertConsumedGrant(
+    binding: Pick<
+      Phase3ApprovalGrant,
+      | "grantId"
+      | "proposalId"
+      | "proposalStorageSha256"
+      | "candidateSha256"
+      | "diffSha256"
+      | "impact"
+      | "reloadTarget"
+    >,
+  ): Promise<void> {
+    return this.run(async () => {
+      this.assertHealthy();
+      await this.refresh();
+      const stored = this.grants.get(binding.grantId);
+      if (
+        !stored?.receipt ||
+        stored.grant.operation !== "apply" ||
+        stored.grant.proposalId !== binding.proposalId ||
+        stored.grant.proposalStorageSha256 !== binding.proposalStorageSha256 ||
+        stored.grant.candidateSha256 !== binding.candidateSha256 ||
+        stored.grant.diffSha256 !== binding.diffSha256 ||
+        stored.grant.impact !== binding.impact ||
+        stored.grant.reloadTarget !== binding.reloadTarget
+      )
+        throw unhealthy(
+          "Consumed approval evidence does not match transaction",
+        );
+    });
+  }
+
   issueApplyGrant(
     proposal: Phase3ProposalSnapshot,
     context: Phase3ApprovalContext,

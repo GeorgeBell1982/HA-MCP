@@ -41,6 +41,12 @@ const phase3Files = [
   "verificationAdapter.ts",
   "homeAssistantAdapter.ts",
   "automationHaBoundary.ts",
+  "operatorApproval.ts",
+  "operatorAudit.ts",
+  "operatorLease.ts",
+  "operatorRuntime.ts",
+  "operatorRecovery.ts",
+  "retention.ts",
 ] as const;
 
 const phase3NativeFiles = ["openat2-replace.c", "approval-custody.c"] as const;
@@ -52,7 +58,7 @@ describe("Phase 3A through Phase 3Q isolation", () => {
     expect(phase2ToolNames.some((name) => name.includes("phase3"))).toBe(false);
     expect(phase3Contract.registered).toBe(false);
     expect(phase3Contract.writesEnabled).toBe(false);
-    expect(phase3Contract.liveAdapters).toBe("absent");
+    expect(phase3Contract.liveAdapters).toBe("local-operator-only");
   });
 
   it("keeps the Phase 3B through Phase 3Q adapters out of runtime composition", () => {
@@ -66,7 +72,6 @@ describe("Phase 3A through Phase 3Q isolation", () => {
       "src/config.ts",
       "package.json",
       "pnpm-workspace.yaml",
-      "addon/Dockerfile",
       "addon/config.yaml",
       "addon/app/package.json",
       "addon/app/src/index.ts",
@@ -106,7 +111,7 @@ describe("Phase 3A through Phase 3Q isolation", () => {
     }
   });
 
-  it("keeps the Phase 3Q approval key on an inert test-only import boundary", () => {
+  it("limits basic approval key composition to the explicit local operator", () => {
     const source = readFileSync("src/phase3/approvalKey.ts", "utf8");
     const imports = moduleSpecifiers(
       "src/phase3/approvalKey.ts",
@@ -143,7 +148,11 @@ describe("Phase 3A through Phase 3Q isolation", () => {
           .map(() => path),
       )
       .sort();
-    expect(importers).toEqual(["tests/phase3ApprovalKey.test.ts"]);
+    expect(importers).toEqual([
+      "addon/app/src/phase3/operatorRuntime.ts",
+      "src/phase3/operatorRuntime.ts",
+      "tests/phase3ApprovalKey.test.ts",
+    ]);
 
     const guardedForms = [
       `import "../src/phase3/approvalKey.js";`,

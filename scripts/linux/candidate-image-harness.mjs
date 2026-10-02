@@ -8,7 +8,9 @@ const helperPaths = Object.freeze([
   "/app/native/git-broker",
   "/app/native/openat2-list",
   "/app/native/openat2-read",
+  "/app/native/openat2-replace",
 ]);
+const phase3CryptoPath = "/usr/lib/libcrypto.so.3";
 const requiredRows = Object.freeze([
   "image:metadata",
   "image:native-paths",
@@ -117,6 +119,7 @@ function parseArguments(argv) {
   );
   for (const path of [
     ...helperPaths,
+    phase3CryptoPath,
     result.git,
     result.runtimeLoader,
     ...result.runtimeInputs,
@@ -228,6 +231,7 @@ row("image:native-artifacts", (config) => {
     config,
     `stat -c '%U:%G %a %F %n' ${helperPaths.join(" ")}; sha256sum ${[
       ...helperPaths,
+      phase3CryptoPath,
       config.git,
       config.runtimeLoader,
       ...config.runtimeInputs,
@@ -268,6 +272,7 @@ function normalizeLinkage(output) {
 function expectedLinkageTargets(config) {
   return [
     config.runtimeLoader,
+    phase3CryptoPath,
     ...config.runtimeInputs.map(
       (input) => /^(.*?\.so\.\d+)/u.exec(input)?.[1] ?? input,
     ),
@@ -298,6 +303,7 @@ row("image:linkage", (config) => {
     .sort();
   const expectedResolved = [
     config.runtimeLoader,
+    phase3CryptoPath,
     ...config.runtimeInputs,
   ].sort();
   expect(

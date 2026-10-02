@@ -224,10 +224,10 @@ describe("Phase 3A contracts", () => {
     expect(phase3Contract).toMatchObject({
       registered: false,
       writesEnabled: false,
-      grantProducer: "absent",
-      cli: "absent",
+      grantProducer: "local-tty-only",
+      cli: "explicit-local-operator",
       mcpTools: "absent",
-      liveAdapters: "absent",
+      liveAdapters: "local-operator-only",
     });
   });
 });

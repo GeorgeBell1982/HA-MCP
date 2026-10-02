@@ -32,6 +32,8 @@ describe("Slice G2 repository-owned Linux harnesses", () => {
       "/app/native/openat2-read",
       "/app/native/openat2-list",
       "/app/native/git-broker",
+      "/app/native/openat2-replace",
+      "/usr/lib/libcrypto.so.3",
       "root:root 555 regular file",
       "git-candidate-harness.mjs",
       "--network",
@@ -59,6 +61,8 @@ const hashes = new Map([
   ["/app/native/git-broker", "01823637f02c49e685f84a2b371870945299e772b6dc37dbf9194b2f34f051f8"],
   ["/app/native/openat2-list", "6fe9587146b927b6f84c53a3d61efd87e6143c9ee95268b9c997d464260bab51"],
   ["/app/native/openat2-read", "59faab9a79575409e59b3672cb1ecb50a9f3b3a7d0db85f1065d499a3c7c425f"],
+  ["/app/native/openat2-replace", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+  ["/usr/lib/libcrypto.so.3", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
   ["/usr/bin/git", "5b5cbd6facf5d86226063d69fe57064bc5ad79bdccee2af0ac787646c564a880"],
   ["/lib/ld-musl-x86_64.so.1", "7d221f4e17e8f7ebfc208d6e621bb7fc71bc99081bed47409d77048d9a69dbd5"],
   ["/usr/lib/libpcre2-8.so.0.14.0", "0eae946d1f2746b6c64cc8beb9230360dc935e8552f89b765c7e697bff232345"],
@@ -85,18 +89,19 @@ if (args[0] === "run" && args.includes("--entrypoint") && args.includes("node"))
 if (args[0] === "run" && args.includes("-lc")) {
   const command = args.at(-1);
   if (command.includes("/app/native/*")) {
-    out("file /app/native/git-broker\\nfile /app/native/openat2-list\\nfile /app/native/openat2-read\\n");
+    out("file /app/native/git-broker\\nfile /app/native/openat2-list\\nfile /app/native/openat2-read\\nfile /app/native/openat2-replace\\n");
     if (mode === "extra-native-entry") out("dir /app/native/debug\\n");
   } else if (command.includes("readlink -f")) {
     const zlibTarget = mode === "bad-link-target" ? "/usr/lib/libz.so.1.2.13" : "/usr/lib/libz.so.1.3.1";
     out("/lib/ld-musl-x86_64.so.1 -> /lib/ld-musl-x86_64.so.1\\n" + hashes.get("/lib/ld-musl-x86_64.so.1") + "  /lib/ld-musl-x86_64.so.1\\n");
     out("/usr/lib/libpcre2-8.so.0 -> /usr/lib/libpcre2-8.so.0.14.0\\n" + hashes.get("/usr/lib/libpcre2-8.so.0.14.0") + "  /usr/lib/libpcre2-8.so.0.14.0\\n");
     out("/usr/lib/libz.so.1 -> " + zlibTarget + "\\n" + hashes.get("/usr/lib/libz.so.1.3.1") + "  " + zlibTarget + "\\n");
+    out("/usr/lib/libcrypto.so.3 -> /usr/lib/libcrypto.so.3\\n" + hashes.get("/usr/lib/libcrypto.so.3") + "  /usr/lib/libcrypto.so.3\\n");
   } else if (command.includes("sha256sum")) {
-    out("root:root 555 regular file /app/native/git-broker\\nroot:root 555 regular file /app/native/openat2-list\\nroot:root 555 regular file /app/native/openat2-read\\n");
+    out("root:root 555 regular file /app/native/git-broker\\nroot:root 555 regular file /app/native/openat2-list\\nroot:root 555 regular file /app/native/openat2-read\\nroot:root 555 regular file /app/native/openat2-replace\\n");
     for (const [path, digest] of hashes) out((mode === "bad-hash" && path === "/app/native/git-broker" ? "0".repeat(64) : digest) + "  " + path + "\\n");
   } else if (command.includes("ldd")) {
-    out("/lib/ld-musl-x86_64.so.1 (0x1)\\nlibc.musl-x86_64.so.1 => /lib/ld-musl-x86_64.so.1 (0x1)\\nlibpcre2-8.so.0 => /usr/lib/libpcre2-8.so.0 (0x1)\\nlibz.so.1 => /usr/lib/libz.so.1 (0x1)\\n");
+    out("/lib/ld-musl-x86_64.so.1 (0x1)\\nlibc.musl-x86_64.so.1 => /lib/ld-musl-x86_64.so.1 (0x1)\\nlibpcre2-8.so.0 => /usr/lib/libpcre2-8.so.0 (0x1)\\nlibz.so.1 => /usr/lib/libz.so.1 (0x1)\\nlibcrypto.so.3 => /usr/lib/libcrypto.so.3 (0x1)\\n");
     if (mode === "extra-link") out("libextra.so.1 => /usr/lib/libextra.so.1 (0x1)\\n");
   } else if (command.includes("-perm -4000"))
     out(mode === "ha-setid" ? "/package/admin/s6-overlay-helpers/command/s6-overlay-suexec\\n" : "");
@@ -154,6 +159,10 @@ process.exit(99);
       "/app/native/openat2-list=sha256:6fe9587146b927b6f84c53a3d61efd87e6143c9ee95268b9c997d464260bab51",
       "--expected-sha256",
       "/app/native/openat2-read=sha256:59faab9a79575409e59b3672cb1ecb50a9f3b3a7d0db85f1065d499a3c7c425f",
+      "--expected-sha256",
+      "/app/native/openat2-replace=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "--expected-sha256",
+      "/usr/lib/libcrypto.so.3=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "--expected-sha256",
       "/usr/bin/git=sha256:5b5cbd6facf5d86226063d69fe57064bc5ad79bdccee2af0ac787646c564a880",
       "--expected-sha256",

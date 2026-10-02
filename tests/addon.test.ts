@@ -23,9 +23,18 @@ const nativeMirrors = [
     "addon/app/src/repository/native/openat2-list.c",
   ],
   ["src/git/native/git-broker.c", "addon/app/src/git/native/git-broker.c"],
+  [
+    "src/phase3/native/openat2-replace.c",
+    "addon/app/src/phase3/native/openat2-replace.c",
+  ],
 ] as const;
 
-const nativeOutputs = ["openat2-read", "openat2-list", "git-broker"] as const;
+const nativeOutputs = [
+  "openat2-read",
+  "openat2-list",
+  "git-broker",
+  "openat2-replace",
+] as const;
 
 describe("installable add-on packaging", () => {
   it("is aarch64-only, released at 0.2.0, and least privilege", async () => {
@@ -82,7 +91,7 @@ describe("installable add-on packaging", () => {
     expect(await readFile("repository.yaml", "utf8")).toContain("name:");
   });
 
-  it("compiles the three exact native mirrors as hardened helpers", async () => {
+  it("compiles the four exact native mirrors as hardened helpers", async () => {
     const docker = await readFile("addon/Dockerfile", "utf8");
     for (const flag of [
       "-fPIE",
@@ -116,6 +125,14 @@ describe("installable add-on packaging", () => {
     expect(docker).toContain(
       "COPY --from=build --chown=0:0 --chmod=0555 /build/native/ /app/native/",
     );
+    expect(docker).toContain("-l:libcrypto.so.3");
+    expect(docker).toContain(
+      "COPY --chown=0:0 --chmod=0555 phase3-operator.sh /app/phase3-operator",
+    );
+    const operator = await readFile("addon/phase3-operator.sh", "utf8");
+    expect(operator).toContain("export HA_MODE=addon");
+    expect(operator).toContain('exec node /app/dist/cli.js phase3 "$@"');
+    expect(operator).not.toContain("HA_ENABLE_WRITES");
   });
 
   it("wires only fixed Phase 2 helpers and preserves the shipped entrypoint", async () => {

@@ -10,15 +10,28 @@ Before any later write phase, create and test a Home Assistant backup and retain
 
 ## Project context as of 2026-10-02
 
-Phase 3 scope was subsequently narrowed following the independent proportionality
-review on the same date. Apply and startup recovery now share one mutation queue in
-source. The real producer-to-coordinator path is now implemented locally for the
-narrow direct automation include and plain-list class. Custody/key extensions are
-deferred research; real HA integration, approval simplification, and retention
-remain open. Start with the
+Phase 3 scope was narrowed following the independent proportionality review on the
+same date. The direct automation proposal path, complete topology admission, real
+HA validation/reload/loaded-state proof, shared queue, typed local operator approval
+and recovery, grant/journal linkage, and one-transaction epoch archive/resume are
+implemented. Disposable Linux amd64/native/HA and automated real-terminal evidence
+are recorded in the ledger. The explicit operator wrapper/helper are packaged;
+the add-on version and read-only mapping are unchanged, so production apply/recovery
+remain unavailable. Native aarch64, actual Supervisor deployment, backup and write
+enablement approval remain open. Custody/key extensions are deferred research.
+Start with the
 [accepted review](requirements-ledger.md#phase-3-proportionality-review-and-scope-adjustment)
 and [revised Phase 3 plan](implementation-plan.md#phase-3-guarded-application) before
 resuming Phase 3 work. Production writes remain disabled.
+
+For the local operator contract, fixed paths, retention limits, uncertainty, and
+manual bootstrap recovery, use
+[operator and epoch lifecycle](phase3-contracts.md#local-operator-and-epoch-lifecycle).
+Do not selectively delete/copy approval receipts, checkpoints, journal records, or
+archives to bypass a refusal. A nonterminal/manual/drifted epoch cannot rotate.
+Production deployment/write enablement remains a separate decision after native
+target evidence and a tested HA backup; source commits and disposable fixtures do
+not authorize it.
 
 This is the resumption entry point for the Home Assistant Engineering MCP. The
 repository contains a working read-only server, conditional protected repository

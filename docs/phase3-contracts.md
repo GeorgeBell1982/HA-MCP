@@ -7,7 +7,8 @@ the [requirements ledger](requirements-ledger.md#phase-3-proportionality-review-
 The [implementation plan](implementation-plan.md#phase-3-guarded-application) defines
 the narrowed first delivery. The core transaction guarantees below remain required;
 later custody/key contracts describe isolated research, not prerequisites for that
-delivery. No production runtime composition or write enablement is added.
+delivery. The explicit local operator CLI now composes the narrowed workflow;
+MCP/default writes remain disabled and production deployment is not authorized.
 
 ## Real automation proposal path
 
@@ -46,14 +47,77 @@ digest checks, followed by exact catalog and protected-registry freshness checks
 The admission policy also requires the proposal's original source hash before
 allowing coordinator effects; the reload catalog rechecks before dispatch. A single
 deployment must compose both with the shared queue. These observations do not lock
-external writers or prove HA semantics. Runtime composition and native/HA acceptance
-remain OPEN; runtime writes remain disabled.
+external writers or prove HA semantics. Local operator composition and disposable
+Linux/HA evidence are recorded below; native aarch64 and live deployment remain OPEN.
 The producer-to-coordinator regression uses the real producer, audit, proposal
 store, adapter, policy, strict YAML validator, and narrow reload adapter, but fake
 filesystem reads and live-effect/HA boundaries. It proves local integration, not
 native confinement, actual HA reload, or production safety.
 
-Phase 3A is an unregistered, adapter-neutral guarded-application core. It has no MCP tool, registry entry, CLI command, live Home Assistant adapter, grant producer, deployment change, version change, or runtime write enablement. All live-effect ports are injected test doubles or future adapters; the contract default is `writesEnabled: false`.
+Phase 3A remains an unregistered, adapter-neutral core. No MCP apply/recovery/grant
+tool is registered. `phase3Contract.writesEnabled: false` describes MCP/default
+policy; the separate Linux add-on operator CLI requires the literal per-command
+`--enable-writes` flag and both input/output TTYs before composing a write policy.
+Environment write flags still cannot enable the server. The add-on version and
+read-only `/homeassistant` mapping are unchanged. The operator wrapper and atomic
+helper are packaged for verification; the read-only mapping refuses apply/recovery
+before approval consumption. This is staged source, not production enablement.
+
+## Local operator and epoch lifecycle
+
+The fixed wrapper `/app/phase3-operator` establishes add-on mode for interactive
+exec independently of PID 1's environment exports. It accepts only `init`, `rotate`,
+`resume`, `apply-proposal <UUID> --enable-writes`, and `recover --enable-writes`.
+There is no `--yes`, environment confirmation, caller approver, supplied grant,
+endpoint override, or filesystem path override. Local/generalized deployments
+remain refused. `/data` must be owner-controlled and not writable by others;
+approval-key and epoch children are private directories.
+
+`init` first proves the runtime parent fresh, then explicitly provisions/loads the
+existing basic approval key at `/data/phase3/approval.key`. Apply/recovery never
+replace a missing key. Key custody, key-sync, and stale-stage research remain
+uncomposed. A BusyBox Linux `flock` on a protected inherited file description holds
+`/data/phase3-runtime/operator.lock` for the entire command. Separate operator
+processes cannot interleave; process death releases the kernel lock. The coordinator
+also shares its in-process apply/recovery queue. External editors remain outside
+both locks.
+
+Apply displays exact proposal/digests and a bounded freshly redacted diff, escapes
+terminal controls/bidi separators, and requires typed `APPLY <UUID> <storage SHA>`.
+It rereads proposal identity and display before internally issuing the existing
+120-second durable single-use grant. Recovery independently displays fixed journal
+metadata, requires typed transaction/hash confirmation, and rereads journal identity.
+Metadata-only attempt/display/confirmation/grant/outcome evidence is fsynced under
+the active epoch. A final audit failure reports transaction/outcome uncertainty and
+never retries an effect. Known false operational outcomes exit nonzero.
+
+The first delivery permits one transaction per active epoch. Another apply refuses
+until the completed epoch is explicitly rotated. This prevents older terminal
+records from being mistaken for current-file drift after a later legitimate apply;
+multi-transaction epochs require a future durable supersession model. The active
+root contains journal, checkpoints, approvals, and bounded operator audit. Rotation
+requires a sole automatic terminal transaction with fresh current digest proof,
+exact checkpoint bytes, and the consumed matching approval receipt when linked.
+Any nonterminal/manual state, drift, corrupt associated evidence, or live unused
+grant blocks it. Legacy journal records without a grant ID remain readable.
+
+Rotation fsyncs a bounded marker, rechecks proof, atomically renames the complete
+active directory to `archive-<UUID>`, fsyncs the parent, then creates and initializes
+a new private active epoch. The whole sequence is recoverable, not atomic. Normal
+startup refuses interrupted/missing/partial state; explicit `resume` validates the
+original directory identity and preserved evidence before finishing recognized
+rotation steps. Archives are never automatically deleted or selectively restored.
+Defaults are 256 archives and 256 MiB combined archived data; exhaustion fails before
+rename and requires a separately reviewed export/removal procedure. Interrupted
+initial bootstrap can require manual review; no automatic key/header repair is
+invented.
+
+Epochs share the stable key and the documented honest private non-rollback state
+root assumption. Selectively copying an archived consumed grant without its receipt,
+archive import, or hostile whole-state rollback is unsupported. Fresh epochs cannot
+find archived grant IDs, and archived stores retain replay denial. No extra key
+derivation/custody protocol is introduced. Real power-loss and native aarch64/live
+Supervisor acceptance remain separate gates.
 
 ## Transaction Journal
 
@@ -71,7 +135,7 @@ Each durable record binds `transactionId`, `proposalId`, consumed `approvalGrant
 
 ## Approval Grants
 
-Approval grants are injected only. Phase 3A provides no persistence, CLI, or producer for grants. A single-use apply grant must bind `grantId`, `proposalId`, `proposalStorageSha256`, `candidateSha256`, `diffSha256`, `operation=apply`, `risk`, exact `impact`, exact `reloadTarget`, `issuedAt`, and `expiresAt`.
+Approval grants in the core are injected through a port; the local TTY operator uses the durable producer internally. A single-use apply grant must bind `grantId`, `proposalId`, `proposalStorageSha256`, `candidateSha256`, `diffSha256`, `operation=apply`, `risk`, exact `impact`, exact `reloadTarget`, `issuedAt`, and `expiresAt`.
 
 The approval port requires the exact pending proposal identity and fails closed before `issuedAt`, at expiry (`now >= expiresAt`), on replay, wrong binding, proposal storage drift, candidate or diff drift, discarded/expired/nonpending proposals, and cancellation before consumption.
 

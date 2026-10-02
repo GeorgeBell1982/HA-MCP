@@ -13,13 +13,13 @@ custody infrastructure is disproportionate to a single managed HA add-on and rea
 HA integration remains incomplete. The user requested that the recommendations be
 recorded and applied.
 
-| Finding                                                                                                                                          | Accepted direction                                                                                                                                     | Current status                                                                                          |
-| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Originally all real proposals were `restart_required`, which coordinator policy denies; the POC uses fixtures/overrides.                         | Deliver one verified automation-YAML producer path with explicit stored `automation.reload`; add producer-to-coordinator coverage without overrides.   | PARTIAL; direct-root candidate metadata and local integration implemented; topology proof remains OPEN. |
-| Concrete validation parses YAML; the POC reload and verification boundaries are fakes.                                                           | Add actual deployment-aware HA validation, reload, and post-reload observation; prove semantic rejection and rollback in disposable HA.                | OPEN; no live safety claim.                                                                             |
-| Per-path concurrency can interleave changes with shared domain reload/rollback effects.                                                          | Serialize apply and the entire recovery pass using one shared in-process queue.                                                                        | IMPLEMENTED; target/native execution remains unverified.                                                |
-| Immutable stores stop at 64 journal transactions, 128 checkpoints, and 256 approval slots, with no supported archive path.                       | Define coordinated retention for terminal state, preserving nonterminal/manual-recovery evidence and replay protection; test restart across retention. | OPEN; do not merely raise limits or manually delete state.                                              |
-| Custody/key synchronization and hostile injected-object handling add substantial maintenance cost without establishing rollback-proof authority. | Freeze those research extensions; evaluate journal-backed durable approval consumption and a simple human approval path.                               | Scope revised; storage replacement remains OPEN and existing safeguards retained.                       |
+| Finding                                                                                                                                          | Accepted direction                                                                                                                                     | Current status                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Originally all real proposals were `restart_required`, which coordinator policy denies; the POC uses fixtures/overrides.                         | Deliver one verified automation-YAML producer path with explicit stored `automation.reload`; add producer-to-coordinator coverage without overrides.   | IMPLEMENTED in source; real HA/native amd64 proof; aarch64/live approval remain OPEN. |
+| Concrete validation parses YAML; the POC reload and verification boundaries are fakes.                                                           | Add actual deployment-aware HA validation, reload, and post-reload observation; prove semantic rejection and rollback in disposable HA.                | IMPLEMENTED and disposable-HA verified; no production certification.                  |
+| Per-path concurrency can interleave changes with shared domain reload/rollback effects.                                                          | Serialize apply and the entire recovery pass using one shared in-process queue.                                                                        | IMPLEMENTED; target/native execution remains unverified.                              |
+| Immutable stores stop at 64 journal transactions, 128 checkpoints, and 256 approval slots, with no supported archive path.                       | Define coordinated retention for terminal state, preserving nonterminal/manual-recovery evidence and replay protection; test restart across retention. | IMPLEMENTED: one-transaction epochs, verified archive/resume, finite budgets.         |
+| Custody/key synchronization and hostile injected-object handling add substantial maintenance cost without establishing rollback-proof authority. | Freeze those research extensions; evaluate journal-backed durable approval consumption and a simple human approval path.                               | IMPLEMENTED: durable grants retained, local TTY approval/recovery; research frozen.   |
 
 The first delivery keeps default-disabled writes, exact proposal/digest binding,
 short-lived human approval with durable one-time consumption, atomic apply,
@@ -236,6 +236,74 @@ Independent review confirmed both contract/canonical-UUID corrections and passed
 91 coordinator/journal/operator cases with three skips. Present approval identity
 survives terminal transitions and restart; uppercase identity is refused before
 persistence. Root/add-on mirrors and `git diff --check` passed.
+
+## Local operator, retention, and staged packaging on 2026-10-02
+
+The first delivery now composes one local Linux add-on operator command outside
+MCP. The fixed wrapper establishes add-on mode; literal write opt-in and a real
+input/output TTY are required for apply/recovery. The current add-on map remains
+read-only and refuses both before grant, audit, or file effects. No version,
+production installation, restart, mount expansion, or runtime MCP write flag was
+changed. Source packaging adds only the existing native atomic helper and wrapper;
+the helper links the existing libcrypto ABI without a new dependency.
+
+Approval uses the existing durable grant store internally after exact typed
+proposal/hash confirmation and fresh redacted display comparison. Recovery has its
+own exact transaction/hash confirmation and durable metadata audit. Attempts are
+recorded before fallible reads, display only after successful terminal output, and
+post-effect audit uncertainty retains known transaction/outcome without retry.
+Unknown failure text is not displayed during recovery. Basic existing key loading
+and explicit bootstrap are concrete operator dependencies; custody/key-sync/stale
+remediation remain frozen. Bootstrap proves the runtime parent fresh before any
+key provisioning, so a missing key in an existing epoch is never replaced.
+
+One transaction per active epoch avoids a false drift report for historical
+terminal transactions after a subsequent legitimate apply. Another apply requires
+explicit rotation. A process-exclusive inherited Linux flock covers the whole
+operator command, alongside the coordinator queue. Retention revalidates the sole
+automatic terminal transaction's current digest immediately before rename, loads
+and hashes its checkpoint, authenticates its linked consumed grant receipt, and
+validates audit evidence. Nonterminal/manual/drift/corrupt state and live unused
+grants block rotation. Whole epochs are archived unchanged with recoverable marker,
+directory rename/fsync and explicit resume; normal startup refuses partial state.
+Defaults are 256 archives and 256 MiB, with no automatic deletion/import. At their
+limit, export/removal needs a separately reviewed procedure. Interrupted initial
+bootstrap intentionally requires manual review. Stable-key reuse retains the
+honest private non-rollback root threat boundary; selective archive restoration is
+unsupported.
+
+Independent review identified and corrected stale proof before rename, missing
+checkpoint/receipt cross-binding, malformed archived audit acceptance, misleading
+post-effect audit failure, false display evidence, control-character rendering,
+bootstrap key replacement, unaudited recovery, and CLI outcome reporting. Final
+retention re-review returned APPROVED and independently passed 78 focused cases.
+Root operator-focused checks passed 73; retention/approval owner checks passed 71.
+Capacity evidence includes 65 terminal epochs and fresh-store continuation beyond
+the original 128 checkpoint and 256 approval-slot lifetime bounds. Windows evidence
+uses injected logical durability; native evidence is recorded in the next slice.
+
+The pinned amd64 candidate Dockerfile build passed. Offline, network-disabled
+candidate checks confirmed importable operator composition, root-owned executable
+wrapper/helper, PIE atomic executable and resolved libcrypto linkage, BusyBox flock,
+`--yes` refusal and piped-init refusal. This does not prove the packaged aarch64
+target, native target execution, real Supervisor integration, power-loss behavior,
+or production availability. Those remain explicit deployment gates.
+
+Final authoritative `CI=true pnpm.cmd verify` passed: 48 files, 1,338 tests,
+16 platform-gated skips; add-on mirrors/context, formatting, lint, typecheck and
+build passed. Final independent operator/retention review returned APPROVED with
+96 focused cases passed. Packaging follow-up review returned APPROVED with 11
+cases passed and three platform skips. `git diff --check` passed.
+
+The network-disabled candidate-image harness passed all eight rows, including the
+74-case real Git protocol matrix, exact four-helper inventory, frozen artifact
+hashes, libcrypto linkage, setid/writable-directory inventory, and expected offline
+startup refusal (exit 1 without Supervisor configuration). Candidate image ID:
+`sha256:1ef0ea428edd63e47343825568eb61e4ac04f3512660154dbcc3b6a2daa80f12`.
+The build used the pinned HA base and Node builder with `--platform linux/amd64`.
+An attempted `linux/arm64` build failed executing `/bin/sh` with `exec format error`
+on this amd64 host. No ARM emulation was installed; native aarch64 build and
+acceptance remain unverified, rather than counted as a passing target build.
 
 ## Objective
 
