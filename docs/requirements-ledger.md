@@ -685,6 +685,26 @@ remain separate gates.
 The unchanged default amd64 path also passed all 24 rows after the ARM extension,
 with cleanup proved and exit zero.
 
+## Production acceptance readiness after native workflow on 2026-10-02
+
+The next gate is a tested production backup and an actual human production
+acceptance session. Read-only Supervisor backup inventory was attempted through
+the SSH CLI, then from the SSH add-on's own environment. The installed CLI uses
+`ha backups info --raw-json`; these requests exited one, with the SSH-user attempt
+classified as authentication/permission failure. Backup contents, identifiers and
+credentials were not printed. Backup existence/download/restore readiness remains
+unverified; no backup creation, restoration or permission change was attempted.
+The user was asked whether a full downloaded backup has been restore-tested.
+
+After fixture cleanup, the add-on's internal health and Supervisor Core config
+routes both returned HTTP 200, Core `2026.9.4`, state `RUNNING`. The registered
+Codex MCP request again returned HTTP 429, so its availability is intermittent;
+the underlying application/Core checks pass but the transport limit cause remains
+unclassified. No limits, pairings or running services were changed to bypass it.
+Source changes in this slice affect disposable harnesses/documentation only;
+installed `0.2.1` needs no update for these checks. Production write enablement
+remains a separate explicit decision after backup and human acceptance readiness.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.
