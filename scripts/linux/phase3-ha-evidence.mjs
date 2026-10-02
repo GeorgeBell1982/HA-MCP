@@ -18,7 +18,7 @@ export const readonlyWorkerRows = Object.freeze([
   "actual-wrapper-readonly-mount-refuses-apply-and-recovery-before-grant-or-audit",
 ]);
 export const boundaryRows = Object.freeze([
-  "owned-ha-2026.7.2-startup",
+  "owned-ha-2026.9.4-startup",
   "candidate-and-checkpoint-components-valid",
   "invalid-ha-trigger-rejected-before-effect",
   "reload-and-exact-loaded-config-verified",

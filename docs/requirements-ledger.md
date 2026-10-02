@@ -393,6 +393,42 @@ acceptance, actual local operator execution, rollback/recovery, or compatibility
 the write workflow with Core `2026.9.4`. Those gates and production write enablement
 remain open. The screenshot is a local user attachment, not a published artifact.
 
+## Current Core 2026.9.4 disposable acceptance on 2026-10-02
+
+The live installed Core version differs from the original July fixture. The
+acceptance harness now pins the official `2026.9.4` linux/amd64 manifest:
+`ghcr.io/home-assistant/home-assistant@sha256:e47c978e1b801466e7f62f612fd552bc3a228e077b31a3f1c22c05cf63d754da`.
+The registry index was resolved with `docker buildx imagetools inspect`, then this
+exact manifest was pulled locally. The harness additionally reads the owned Core
+instance's authenticated `/api/config` and refuses a version other than `2026.9.4`
+before emitting its versioned startup row. No caller image/endpoint override was
+introduced. The earlier `2026.7.2` evidence above remains historical; the same
+documented full-workflow command now exercises `2026.9.4`.
+
+All 24 current-Core rows passed with exit zero, including actual component
+validation, exact loaded-config proof, producer-to-native apply, reload uncertainty
+and probe-failure rollback, fresh-process SIGKILL recovery, bounded archive/fresh
+epoch continuation, real-wrapper PTY approval/recovery, kernel lease behavior and
+read-only mount refusal. Successful daemon name inventories proved all owned
+containers/volumes absent. No application behavior change was needed for this Core
+version. This closes the disposable current-Core compatibility gap, while native
+Pi helper provenance/security and actual operator acceptance remain separate.
+
+Git diagnosis traced the public `repository_unavailable` result to the generic
+mapping of confined-broker capability refusal. Missing direct `.git`, unsupported
+topology/config, missing runtime artifacts, or unavailable confinement can all
+produce that refusal; the public result cannot distinguish them. The read-only
+MCP catalog intentionally does not expose `.git`, so no live root cause is claimed.
+The guarded apply composition does not invoke Git, and normal proposal generation
+uses the existing YAML diff code without executing the broker. Git initialization
+or weakening confinement is not a prerequisite for that workflow and was not done.
+Confirmation of the Pi's Git setup is still pending from the user.
+
+Authoritative `CI=true pnpm.cmd verify` passed all 49 files: 1,340 tests passed,
+16 platform-gated skips; mirrors/context, formatting, lint, typecheck and build
+passed. Focused harness regression tests passed 2/2; scoped formatting/lint and
+`git diff --check` passed.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

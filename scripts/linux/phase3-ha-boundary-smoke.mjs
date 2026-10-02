@@ -28,7 +28,7 @@ if (
   process.exit(64);
 }
 const image =
-  "ghcr.io/home-assistant/home-assistant@sha256:1476924357b46e80735c13e94232ba5c853cac052e9df4bb28d50fa56348097b";
+  "ghcr.io/home-assistant/home-assistant@sha256:e47c978e1b801466e7f62f612fd552bc3a228e077b31a3f1c22c05cf63d754da";
 const name = `codex-ha-boundary-${randomUUID()}`;
 const volume = `${name}-config`;
 const workerName = `${name}-worker`;
@@ -173,7 +173,17 @@ try {
   };
   const boundary = new HomeAssistantAutomationBoundary(config, source);
   const http = new HomeAssistantPhase3Client(config);
-  row("owned-ha-2026.7.2-startup");
+  const versionResponse = await fetch(`${base}/api/config`, {
+    headers: { Authorization: `Bearer ${token.access_token}` },
+    signal: AbortSignal.timeout(10_000),
+    redirect: "error",
+  });
+  if (
+    !versionResponse.ok ||
+    (await versionResponse.json()).version !== "2026.9.4"
+  )
+    throw new Error("fixture_core_version_mismatch");
+  row("owned-ha-2026.9.4-startup");
   await boundary.validate(original, "checkpoint_pre_apply", context());
   await boundary.validate(candidate, "candidate_pre_apply", context());
   row("candidate-and-checkpoint-components-valid");

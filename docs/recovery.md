@@ -20,9 +20,12 @@ source release `0.2.1` retains the read-only mapping, so production apply/recove
 remain unavailable. Installation of `0.2.1` on the Pi is now reported by the user
 and confirmed by the live update entity. Read-only system/config/proposal checks
 passed against Core `2026.9.4`; Git status refused `repository_unavailable`.
-Native helper/security and operator acceptance, current-Core write compatibility,
+The 24-row disposable workflow now also passes against Core `2026.9.4`.
+Native helper/security and actual Pi operator acceptance,
 backup and write enablement approval remain open. Custody/key extensions are
 deferred research. See the [installed smoke evidence](requirements-ledger.md#installed-021-read-only-smoke-evidence-on-2026-10-02).
+See [current-Core acceptance](requirements-ledger.md#current-core-202694-disposable-acceptance-on-2026-10-02)
+for the updated immutable fixture and remaining Git diagnosis boundary.
 Start with the
 [accepted review](requirements-ledger.md#phase-3-proportionality-review-and-scope-adjustment)
 and [revised Phase 3 plan](implementation-plan.md#phase-3-guarded-application) before
