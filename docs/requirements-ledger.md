@@ -451,6 +451,52 @@ Authoritative `CI=true pnpm.cmd verify` passed all 49 files: 1,340 tests passed,
 passed. Focused harness regression tests passed 2/2; scoped formatting/lint and
 `git diff --check` passed.
 
+## Native Pi read-only packaging acceptance on 2026-10-02
+
+After the user configured Advanced SSH & Web Terminal, dedicated-key SSH to the
+recorded HA address succeeded. The Windows client initially failed with a
+corrupted-MAC error; explicitly selecting supported `aes256-gcm@openssh.com`
+resolved the client negotiation failure without enabling server compatibility
+mode. The newly enrolled host key is checked strictly on subsequent connections.
+The configured `homeassistant` login is UID 1000; Docker inspection requires
+noninteractive `sudo -n`, which succeeded. No SSH app setting was changed remotely.
+
+The running MCP container is
+`app_da397bfb_home_assistant_engineering_mcp`, image
+`da397bfb/aarch64-addon-home_assistant_engineering_mcp:0.2.1`, ID
+`sha256:5145e004442b7e7e23466b3b793bb302571e7a656fd6416f7b5099d789dfc43e`.
+Docker reports `arm64 linux`; the actual container reports `aarch64`, Node
+`v22.23.0`, and the imported operator module reports `arm64`.
+The wrapper and four native artifacts are owned by `0:0`, mode `555`.
+Direct ELF header inspection confirmed all four are ELF64 little-endian AArch64
+PIE. Atomic-helper linkage resolves the aarch64 musl loader and libcrypto.so.3.
+
+| Native artifact | Observed Pi SHA-256                                                |
+| --------------- | ------------------------------------------------------------------ |
+| git-broker      | `6c64b053d1ea32e470d56f2866aa74d3d56e4d5174e4aa402f34883016cc94e3` |
+| openat2-list    | `174026e35c40d3134008619359c5b588c647d5f5b1c3c353619fc6ab1fe86d09` |
+| openat2-read    | `7f591b907003fe8203240df5d0cb1122da0596f242e7e8ba8a1d484161f5b096` |
+| openat2-replace | `458305a5e8cdb7eb05bbab1d1b4e3e161e2fc8560794571336a01a8c87635a1f` |
+
+Docker mount inspection reports `/homeassistant` not writable, `/data` writable.
+Kernel `/proc/self/mountinfo` reports `/homeassistant` with VFS `ro`; Node's
+`fs.accessSync(..., W_OK)` refuses with `EROFS`, matching the operator preflight.
+BusyBox `test -w` misleadingly reported writable based on permissions; the
+documented snippet was corrected to the Node check and rerun on the actual Pi with
+exit zero. Unavailable or writable mounts now fail the snippet. This is a
+documentation correction; the application's Node preflight already behaved
+correctly, so no code release was needed.
+
+Direct `lstat` of `/homeassistant/.git` returned `ENOENT`. The live configuration is
+not currently a Git repository at the required location; the Git refusal is
+expected for that state. Git was not initialized. These results close reported
+installation and native packaging/ABI availability checks. They do not prove the
+entire native security/fault matrix, actual human-approved operator lifecycle or
+power-loss durability. No keys/state were initialized in the MCP container, and
+no proposal, configuration, reload, restart or mount change was made. Documentation
+formatting and `git diff --check` passed; actual target commands supply the fresh
+verification evidence for this documentation-only change.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

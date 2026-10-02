@@ -112,9 +112,11 @@ Complete the following delivery gates in order:
 Current-Core follow-up: the same 24-row disposable native/HA/operator workflow
 passed against pinned Core `2026.9.4`, matching the installed Pi version. Source
 release `0.2.1` installation and read-only configuration/proposal checks are
-confirmed. Actual Pi operator/security evidence and production write enablement
-remain gated; Git refusal diagnosis awaits confirmation of the configuration's
-Git setup. See the requirements ledger for evidence and limitations.
+confirmed. Native Pi packaging/ABI availability, root-owned helpers, actual
+read-only mount and operator import are now verified over SSH; `.git` is absent,
+explaining the Git refusal. Complete native fault/security and actual Pi operator
+lifecycle evidence, backup and production write enablement remain gated.
+See the requirements ledger for evidence and limitations.
 
 Freeze the separate approval custody helper, stale-stage remediation, key-sync
 protocol, and hostile injected-object defenses as isolated research. They are not

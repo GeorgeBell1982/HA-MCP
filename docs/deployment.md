@@ -60,13 +60,7 @@ stat -c '%u:%g %a %n' /app/phase3-operator /app/native/git-broker /app/native/op
 sha256sum /app/native/git-broker /app/native/openat2-list /app/native/openat2-read /app/native/openat2-replace
 ldd /app/native/openat2-replace
 node --input-type=module -e 'const m = await import("/app/dist/phase3/operatorRuntime.js"); if (typeof m.runPhase3OperatorCommand !== "function") process.exit(1); console.log("operator module available", process.arch);'
-if [ ! -d /homeassistant ]; then
-  echo 'config mount unavailable'
-elif [ -w /homeassistant ]; then
-  echo 'config mount writable: unexpected for 0.2.1'
-else
-  echo 'config mount read-only'
-fi
+node --input-type=module -e 'import fs from "node:fs"; try { fs.accessSync("/homeassistant", fs.constants.W_OK); console.log("config mount writable: unexpected for 0.2.1"); process.exitCode = 1; } catch (e) { if (e.code === "EROFS") console.log("config mount read-only (EROFS)"); else { console.log("config mount unavailable", e.code); process.exitCode = 1; } }'
 if [ -d /homeassistant/.git ] && [ ! -L /homeassistant/.git ]; then
   echo 'direct Git metadata directory present'
 else
@@ -78,6 +72,10 @@ Expected on the Pi: `aarch64`/`arm64`, a supported Node version, wrapper and fou
 helpers owned by `0:0` with mode `555`, resolved loader/libcrypto linkage, importable
 operator composition, and a read-only configuration mount. Preserve the helper
 hashes as target evidence; amd64 helper hashes are not expected to match aarch64.
+The Node access check matches the operator's actual preflight. BusyBox shell
+`test -w` can report writable based on permissions even on the Pi's read-only bind
+mount; do not use it as read-only proof. Missing/permission-denied mounts fail the
+snippet and are not reported as read-only.
 This checks packaging availability, not the complete native security/fault matrix
 or a human-approved apply/recovery workflow.
 
