@@ -42,36 +42,45 @@ interface LockState {
 }
 
 export class Phase3ResourceLocks {
-  private readonly locks = new Map<string, LockState>();
+  private readonly state: LockState = { held: false, queue: [] };
 
-  constructor(private readonly maxWaitersPerPath = 32) {}
+  constructor(private readonly maxWaiters = 32) {}
 
   async acquire(
     path: string,
     context: Phase3LockContext,
   ): Promise<Phase3LockLease> {
-    const canonical = canonicalPhase3Path(path);
+    return this.acquireQueue(canonicalPhase3Path(path), context);
+  }
+
+  async acquireRecovery(context: Phase3LockContext): Promise<Phase3LockLease> {
+    return this.acquireQueue("startup recovery", context);
+  }
+
+  private async acquireQueue(
+    path: string,
+    context: Phase3LockContext,
+  ): Promise<Phase3LockLease> {
     assertActive(context);
-    const state = this.state(canonical);
+    const state = this.state;
     if (!state.held) {
       state.held = true;
       try {
         assertActive(context);
       } catch (error) {
         state.held = false;
-        if (state.queue.length === 0) this.locks.delete(canonical);
         throw error;
       }
-      return this.lease(canonical);
+      return this.lease(path);
     }
-    if (state.queue.length >= this.maxWaitersPerPath)
+    if (state.queue.length >= this.maxWaiters)
       throw new Phase3LockError(
         "max_waiters_exceeded",
-        "Too many waiters for the locked resource",
+        "Too many waiters for the mutation queue",
       );
     return await new Promise<Phase3LockLease>((resolve, reject) => {
       const waiter: Waiter = {
-        path: canonical,
+        path,
         active: true,
         timer: undefined,
         resolve,
@@ -80,7 +89,7 @@ export class Phase3ResourceLocks {
         abort: () => {
           if (!waiter.active) return;
           waiter.active = false;
-          this.removeWaiter(canonical, waiter);
+          this.removeWaiter(waiter);
           cleanup(waiter);
           reject(
             new Phase3LockError(
@@ -112,7 +121,7 @@ export class Phase3ResourceLocks {
       waiter.timer = setTimeout(() => {
         if (!waiter.active) return;
         waiter.active = false;
-        this.removeWaiter(canonical, waiter);
+        this.removeWaiter(waiter);
         cleanup(waiter);
         reject(
           new Phase3LockError(
@@ -128,15 +137,8 @@ export class Phase3ResourceLocks {
   waiterCount(path: string): number {
     const parsed = phase3CanonicalRelativePathSchema.safeParse(path);
     if (!parsed.success) return 0;
-    return this.locks.get(parsed.data)?.queue.length ?? 0;
-  }
-
-  private state(path: string): LockState {
-    const existing = this.locks.get(path);
-    if (existing) return existing;
-    const created = { held: false, queue: [] };
-    this.locks.set(path, created);
-    return created;
+    return this.state.queue.filter((waiter) => waiter.path === parsed.data)
+      .length;
   }
 
   private lease(path: string): Phase3LockLease {
@@ -146,19 +148,17 @@ export class Phase3ResourceLocks {
       release: () => {
         if (released) return;
         released = true;
-        this.release(path);
+        this.release();
       },
     });
   }
 
-  private release(path: string): void {
-    const state = this.locks.get(path);
-    if (!state) return;
+  private release(): void {
+    const state = this.state;
     for (;;) {
       const waiter = state.queue.shift();
       if (!waiter) {
         state.held = false;
-        if (state.queue.length === 0) this.locks.delete(path);
         return;
       }
       if (!waiter.active) continue;
@@ -180,14 +180,13 @@ export class Phase3ResourceLocks {
       waiter.active = false;
       cleanup(waiter);
       state.held = true;
-      waiter.resolve(this.lease(path));
+      waiter.resolve(this.lease(waiter.path));
       return;
     }
   }
 
-  private removeWaiter(path: string, waiter: Waiter): void {
-    const state = this.locks.get(path);
-    if (!state) return;
+  private removeWaiter(waiter: Waiter): void {
+    const state = this.state;
     const index = state.queue.indexOf(waiter);
     if (index >= 0) state.queue.splice(index, 1);
   }

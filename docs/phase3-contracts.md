@@ -1,5 +1,51 @@
 # Phase 3A Guarded Apply Core Contracts
 
+## Current delivery decision
+
+The 2026-10-02 independent assessment and accepted scope adjustment are recorded in
+the [requirements ledger](requirements-ledger.md#phase-3-proportionality-review-and-scope-adjustment).
+The [implementation plan](implementation-plan.md#phase-3-guarded-application) defines
+the narrowed first delivery. The core transaction guarantees below remain required;
+later custody/key contracts describe isolated research, not prerequisites for that
+delivery. No production runtime composition or write enablement is added.
+
+## Real automation proposal path
+
+The first producer candidate path is `automations.yaml`, referenced by the exact
+top-level `automation: !include automations.yaml` in `configuration.yaml`. The
+producer uses the existing protected reader, catalog, and strict YAML projection
+to establish that mapping; a filename alone is insufficient. Unrelated script,
+scene, and other domain includes are allowed. Named automation keys, packages,
+configuration aliases, direct shared includes (including normalized aliases), and
+root-directory includes remain outside this classification.
+
+Source and candidate must be plain sequences whose direct items are maps and whose
+complete projected trees contain no anchors, aliases, includes, inputs, or secrets.
+An empty sequence is supported. Unsupported inspected layouts retain
+`restart_required` without a target. Read/freshness errors, catalog drift, root/file
+identity or size mismatch, and differing configuration reads fail the operation;
+they are not downgraded to an unsupported layout. Every retained configuration
+buffer is wiped after inspection, including on failure.
+
+A directly classified candidate stores public `reloadImpact: domain_reload` and optional
+`reloadTarget: automation.reload`. The canonical protected storage digest binds
+that field with the complete proposal. The schema permits that target only for
+`automations.yaml` with the matching impact; the MCP input still accepts no target.
+Legacy records without a target remain canonical and readable. A legacy
+`domain_reload` record without a stored target remains unapplyable by Phase 3.
+
+This is proposal-time metadata, not proof of current HA topology or semantic
+validity. Transitive sharing through unrelated include files is not inspected by
+this narrow classifier. A future live reload catalog must revalidate the mapping
+and reject unsupported/shared topology before dispatch; the apply admission/HA
+validation boundary must also reject unsafe topology before any live write. The
+real proposal-path delivery gate therefore remains OPEN for exclusivity and current
+mapping proof. Runtime writes remain disabled.
+The producer-to-coordinator regression uses the real producer, audit, proposal
+store, adapter, policy, strict YAML validator, and narrow reload adapter, but fake
+filesystem reads and live-effect/HA boundaries. It proves local integration, not
+native confinement, actual HA reload, or production safety.
+
 Phase 3A is an unregistered, adapter-neutral guarded-application core. It has no MCP tool, registry entry, CLI command, live Home Assistant adapter, grant producer, deployment change, version change, or runtime write enablement. All live-effect ports are injected test doubles or future adapters; the contract default is `writesEnabled: false`.
 
 ## Transaction Journal
@@ -50,7 +96,21 @@ Precommit cancellation has no live effect. After the apply commit point, caller 
 
 ## Locks
 
-Resource locks validate canonical relative paths, serialize the same path, allow distinct paths, bound waiters, check signal and deadline before enqueue, on wake, and before return, remove aborted/deadline waiters, and release on all exits.
+The shared mutation queue validates canonical relative paths for apply and serializes
+all paths, including distinct files and domains. A coordinator retains its lease
+through validation, apply, reload, verification, rollback, and final journal updates.
+Startup recovery acquires the same queue before discovering records and retains it
+through the whole recovery pass, releasing it even on discovery or recovery failure.
+Waiters are globally bounded per queue, signal/deadline checks occur before enqueue
+and on wake, cancelled/expired waiters are removed, and release is idempotent. Lease
+paths describe the operation; they do not select independent locks.
+
+All coordinators in one deployment must share one `Phase3ResourceLocks` instance.
+This is cooperative in-process exclusion only. It does not serialize separate
+processes, external configuration editors, or arbitrary callers. Startup recovery
+must finish before production mutation admission; unresolved manual-recovery state
+remains an activation blocker. These composition requirements are not implemented
+by creating multiple independent queue instances.
 
 ## Startup Recovery
 

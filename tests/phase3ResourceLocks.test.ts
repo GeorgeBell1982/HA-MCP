@@ -10,7 +10,7 @@ const context = () => ({
 });
 
 describe("Phase 3A resource locks", () => {
-  it("serializes identical canonical paths and allows distinct paths", async () => {
+  it("serializes all paths in FIFO order and preserves each lease identity", async () => {
     const locks = new Phase3ResourceLocks();
     const first = await locks.acquire("automations/a.yaml", context());
     let secondAcquired = false;
@@ -20,13 +20,26 @@ describe("Phase 3A resource locks", () => {
         secondAcquired = true;
         return lease;
       });
-    const distinct = await locks.acquire("automations/b.yaml", context());
+    let distinctAcquired = false;
+    const distinct = locks
+      .acquire("automations/b.yaml", context())
+      .then((lease) => {
+        distinctAcquired = true;
+        return lease;
+      });
     expect(secondAcquired).toBe(false);
-    distinct.release();
+    expect(distinctAcquired).toBe(false);
     first.release();
     const secondLease = await second;
     expect(secondAcquired).toBe(true);
+    expect(distinctAcquired).toBe(false);
+    expect(secondLease.path).toBe("automations/a.yaml");
+    first.release();
+    expect(distinctAcquired).toBe(false);
     secondLease.release();
+    const distinctLease = await distinct;
+    expect(distinctLease.path).toBe("automations/b.yaml");
+    distinctLease.release();
   });
 
   it("removes cancelled and deadline waiters", async () => {
@@ -76,7 +89,7 @@ describe("Phase 3A resource locks", () => {
       },
     );
     const first = await locks.acquire("automations/a.yaml", context());
-    const queued = locks.acquire("automations/a.yaml", context());
+    const queued = locks.acquire("automations/b.yaml", context());
     await expect(
       locks.acquire("automations/a.yaml", context()),
     ).rejects.toMatchObject({

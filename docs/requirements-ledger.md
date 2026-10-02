@@ -1,6 +1,98 @@
 # Requirements ledger
 
-Status: Phase 1 validation contract, updated 2026-07-15
+Status: phase evidence through Phase 3Q, with the accepted Phase 3 delivery scope
+adjustment dated 2026-10-02. Historical slice constraints remain recorded below.
+
+## Phase 3 proportionality review and scope adjustment
+
+On 2026-10-02 an independent AI reviewer assessed Phase 3 source, the real proposal
+producer, adapters, POC, tests, and recorded evidence. This was a code/architecture
+assessment, not an external human audit or production security certification. Its
+verdict was that the crash-safe transaction core is justified, while approval/key
+custody infrastructure is disproportionate to a single managed HA add-on and real
+HA integration remains incomplete. The user requested that the recommendations be
+recorded and applied.
+
+| Finding                                                                                                                                          | Accepted direction                                                                                                                                     | Current status                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Originally all real proposals were `restart_required`, which coordinator policy denies; the POC uses fixtures/overrides.                         | Deliver one verified automation-YAML producer path with explicit stored `automation.reload`; add producer-to-coordinator coverage without overrides.   | PARTIAL; direct-root candidate metadata and local integration implemented; topology proof remains OPEN. |
+| Concrete validation parses YAML; the POC reload and verification boundaries are fakes.                                                           | Add actual deployment-aware HA validation, reload, and post-reload observation; prove semantic rejection and rollback in disposable HA.                | OPEN; no live safety claim.                                                                             |
+| Per-path concurrency can interleave changes with shared domain reload/rollback effects.                                                          | Serialize apply and the entire recovery pass using one shared in-process queue.                                                                        | IMPLEMENTED; target/native execution remains unverified.                                                |
+| Immutable stores stop at 64 journal transactions, 128 checkpoints, and 256 approval slots, with no supported archive path.                       | Define coordinated retention for terminal state, preserving nonterminal/manual-recovery evidence and replay protection; test restart across retention. | OPEN; do not merely raise limits or manually delete state.                                              |
+| Custody/key synchronization and hostile injected-object handling add substantial maintenance cost without establishing rollback-proof authority. | Freeze those research extensions; evaluate journal-backed durable approval consumption and a simple human approval path.                               | Scope revised; storage replacement remains OPEN and existing safeguards retained.                       |
+
+The first delivery keeps default-disabled writes, exact proposal/digest binding,
+short-lived human approval with durable one-time consumption, atomic apply,
+checkpoint, durable intent, the existing 13-state transaction machine, reload
+ambiguity tracking, rollback, recovery, and manual intervention on uncertainty.
+One managed deployment and one supported YAML/domain operation are in scope.
+Restart support, Git commit, broader domains/deployment types, custody expansion,
+and production enablement are deferred. See the revised
+[Phase 3 plan](implementation-plan.md#phase-3-guarded-application).
+
+The queue change removes the per-path lock map and uses one FIFO with a global
+waiter limit. Every coordinator in a deployment must share the same instance.
+Recovery acquires it before journal discovery and releases it in `finally`. It is
+not a cross-process lock and does not constrain external editors. No registry,
+write flag, proposal schema, HA endpoint, grant persistence, retention deletion,
+container mapping, or deployment behavior is changed.
+
+Assessment evidence: the independent reviewer reported 574 focused tests passed,
+with two native scenarios skipped. That is historical review evidence, not native
+Linux, aarch64, power-loss, or disposable-HA acceptance. Implementation validation
+is recorded separately after the queue/scope adjustment.
+
+Implementation evidence on 2026-10-02: focused queue/coordinator/recovery/isolation
+tests passed 98/98. Authoritative `CI=true pnpm.cmd verify` exited zero on Windows:
+41 test files passed, 1,135 tests passed, 16 skipped, with add-on mirror/context,
+formatting, lint, typecheck, and build passed. `git diff --check` passed. Regression
+coverage includes different-file FIFO handoff with idempotent release, globally
+bounded waiters, a second apply waiting through the first verification, recovery
+waiting behind apply and excluding other paths, and lease release after failed
+journal discovery. No native Linux or live HA execution was performed for this
+adjustment.
+
+Independent follow-up review on 2026-10-02 returned `APPROVED` with no actionable
+concurrency/lifecycle findings in the bounded change. The reviewer independently
+ran 89 queue/coordinator/recovery tests, checked the three root/add-on source hashes,
+and passed `git diff --check`. The review confirmed the plan's open integration and
+retention gates and the shared-instance/in-process limitation.
+
+## Automation proposal implementation on 2026-10-02
+
+The producer now inspects `configuration.yaml` through the existing protected
+reader/catalog and strict YAML projection. For a direct
+`automation: !include automations.yaml` with plain source/candidate lists, it stores
+`domain_reload` and `automation.reload` as candidate metadata. Named automation
+keys, packages, aliases, shared direct references, root directory includes, and
+nested automation references remain conservative. Configuration identity/root/size
+and content drift abort before proposal persistence. Other file paths retain
+restart-required behavior, and old stored records remain readable without migration.
+
+The optional public target is constrained by schema and covered by the existing
+storage digest; clients cannot submit it. The actual proposal producer, persistent
+store/audit, Phase 3 adapter/policy/coordinator, strict YAML validation and narrow
+reload adapter are exercised together without proposal overrides. Filesystem/HA
+effects are test doubles. This is local seam evidence, not HA validation or reload.
+
+Independent review identified transitive sharing through unrelated includes as an
+unproved boundary. The accepted bounded resolution is to label the target as a
+direct-root candidate and keep exclusivity/current-topology proof OPEN. A regression
+shows that the narrow reload adapter still consults the catalog and refuses dispatch
+when it returns unavailable, despite a stored target. The catalog rejection in this
+test is injected; a real include-graph admission check remains to be implemented
+before any production write. No Phase 3 registry, write enablement, HA call, add-on
+version change, privilege/mount expansion, or deployment is part of this slice.
+
+Focused producer/storage/schema/dispatcher tests passed 113 with two native-gated
+skips. Initial authoritative `CI=true pnpm.cmd verify` passed all 41 files, 1,155
+tests, with 16 skips. After the transitive-sharing and empty/plain-list regressions,
+the focused producer/adapter/schema run passed all 50 cases. Final authoritative
+`CI=true pnpm.cmd verify` exited zero: 41 files, 1,158 tests passed, 16 skipped,
+including add-on mirror/context, format, lint, typecheck, and build. Independent
+follow-up review returned `APPROVED` within the candidate-metadata scope, independently
+passing 50 focused cases and `git diff --check`. Native Linux, live HA, actual
+include-graph admission, and prewrite HA semantic validation remain unverified.
 
 ## Objective
 
@@ -222,7 +314,7 @@ Risk: HIGH. Phase 3A introduces the internal guarded-application state machine t
 | P3A-003 | Coordinator runs policy before lock, canonical locking, policy/identity recheck, source digest, local validation, approval consume, checkpoint, intent journal, atomic apply, validation, narrow reload, and verification.          | `src/phase3/applyCoordinator.ts` with injected ports and default-closed `GuardedPhase3PolicyPort`. | `tests/phase3ApplyCoordinator.test.ts`.                                                                          |
 | P3A-004 | Every post-commit failure carries the latest durable record, writes rollback intent, verifies checkpoint integrity, restores checkpoint, validates and verifies rollback, or requires manual recovery without implicit restart.     | `Phase3ApplyCoordinator.rollbackAfterCommit`.                                                      | `tests/phase3ApplyCoordinator.test.ts` and `tests/phase3Recovery.test.ts`.                                       |
 | P3A-005 | Precommit cancellation has no live effect; postcommit caller cancellation is ignored while internal verification or rollback finishes.                                                                                              | Approval/lock precommit signal checks and coordinator internal postcommit context.                 | `tests/phase3Approval.test.ts`, `tests/phase3ResourceLocks.test.ts`, and `tests/phase3ApplyCoordinator.test.ts`. |
-| P3A-006 | Bounded keyed locks serialize same path, allow distinct paths, and clean cancelled/deadline waiters.                                                                                                                                | `src/phase3/resourceLocks.ts`.                                                                     | `tests/phase3ResourceLocks.test.ts`.                                                                             |
+| P3A-006 | One bounded shared mutation queue serializes all paths and startup recovery, and cleans cancelled/deadline waiters.                                                                                                                 | `src/phase3/resourceLocks.ts` and coordinator recovery lease.                                      | Lock FIFO/capacity tests and apply/recovery concurrency regressions.                                             |
 | P3A-007 | Startup recovery never reapplies candidate and returns explicit per-record recovery dispositions for digest-driven rollback, finish, manual attention, or terminal no-transition inspection for every state.                        | `Phase3ApplyCoordinator.recover` and `phase3RecoveryTable`.                                        | `tests/phase3Recovery.test.ts`.                                                                                  |
 | P3A-008 | No MCP, registry, config, CLI, add-on runtime, version, mapping, deployment, or live-write enablement changes.                                                                                                                      | Phase 3A files are an unregistered source island; `phase3Contract.writesEnabled=false`.            | `tests/phase3Isolation.test.ts`; diff inspection.                                                                |
 | P3A-009 | Root and add-on source mirrors are exact.                                                                                                                                                                                           | `src/phase3/*.ts` mirrored to `addon/app/src/phase3/*.ts`.                                         | `tests/phase3Isolation.test.ts` and `pnpm addon:context` through `pnpm verify`.                                  |

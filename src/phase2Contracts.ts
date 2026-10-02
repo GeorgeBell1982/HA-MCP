@@ -212,9 +212,22 @@ export const proposalPublicSchema = z
     risk: z.enum(["low", "high"]),
     validationPlan: z.array(z.string().min(1).max(200)).max(20),
     reloadImpact: z.enum(["none", "domain_reload", "restart_required"]),
+    reloadTarget: z.literal("automation.reload").optional(),
     sourceEvidence: z.literal(phase2SourceEvidence.proposalStore),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.reloadTarget !== undefined &&
+      (value.reloadImpact !== "domain_reload" ||
+        value.path !== "automations.yaml")
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["reloadTarget"],
+        message: "Automation reload requires a supported automation proposal",
+      });
+  });
 
 const canonicalProtectedBase64Schema = z
   .string()

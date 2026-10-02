@@ -1,6 +1,17 @@
 # Phase 2 repository contract
 
-Status: frozen for implementation; tools are not registered.
+Status: the frozen inventory is implemented and registered conditionally by Slice H
+in managed add-on mode. Earlier unregistered/no-mount statements below record the
+individual development slices and are superseded for runtime activation by the
+[Slice H ledger](requirements-ledger.md#slice-h-phase-2-add-on-activation-contract).
+Live Phase 2 deployment remains unverified in the retained record.
+
+As of 2026-10-02, supported direct-include automation-list proposals may store an
+optional repository-derived `reloadTarget: automation.reload` with `domain_reload`
+impact. The [Phase 3 producer contract](phase3-contracts.md#real-automation-proposal-path)
+defines the restricted topology and structure checks. No MCP input selects this
+target; older target-absent records remain readable. This metadata does not enable
+application, reload, or any live mutation.
 
 Phase 2 adds bounded repository reads and proposal metadata. It does not modify the live Home Assistant configuration. The authoritative configuration root is /homeassistant; writable proposal and audit state belongs under protected add-on /data.
 

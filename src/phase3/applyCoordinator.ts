@@ -243,10 +243,16 @@ export class Phase3ApplyCoordinator {
   }
 
   async recover(): Promise<readonly Phase3RecoveryResult[]> {
-    const recovered: Phase3RecoveryResult[] = [];
-    const records = await this.ports.journal.listRecoverable();
-    for (const record of records) recovered.push(await this.recoverOne(record));
-    return Object.freeze(recovered);
+    const lease = await this.ports.locks.acquireRecovery(internalContext());
+    try {
+      const recovered: Phase3RecoveryResult[] = [];
+      const records = await this.ports.journal.listRecoverable();
+      for (const record of records)
+        recovered.push(await this.recoverOne(record));
+      return Object.freeze(recovered);
+    } finally {
+      lease.release();
+    }
   }
 
   private async applyCandidate(

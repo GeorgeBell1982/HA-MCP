@@ -222,6 +222,79 @@ async function recover(
 }
 
 describe("Phase 3A startup recovery", () => {
+  it("waits for apply and blocks other paths until the entire recovery finishes", async () => {
+    const locks = new Phase3ResourceLocks();
+    const applyLease = await locks.acquire("automations/other.yaml", {
+      signal: new AbortController().signal,
+      deadlineAt: Date.now() + 10_000,
+    });
+    const journal = new LoggingJournal(record("intent_prepared"));
+    const fake = recoveryPorts({ bytes: Buffer.from(oldBytes) }, journal);
+    let enteredRecovery!: () => void;
+    let finishRecovery!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredRecovery = resolve;
+    });
+    const paused = new Promise<void>((resolve) => {
+      finishRecovery = resolve;
+    });
+    const recovery = new Phase3ApplyCoordinator({
+      ...fake,
+      locks,
+      source: {
+        ...fake.source,
+        async readDigest() {
+          enteredRecovery();
+          await paused;
+          return oldSha;
+        },
+      },
+    }).recover();
+    expect(fake.log).toEqual([]);
+    applyLease.release();
+    await entered;
+    let nextAcquired = false;
+    const next = locks
+      .acquire("scripts/other.yaml", {
+        signal: new AbortController().signal,
+        deadlineAt: Date.now() + 10_000,
+      })
+      .then((lease) => {
+        nextAcquired = true;
+        return lease;
+      });
+    expect(nextAcquired).toBe(false);
+    finishRecovery();
+    const [result] = await recovery;
+    expect(result?.record.state).toBe("rollback_verification_succeeded");
+    (await next).release();
+  });
+
+  it("releases the mutation queue when recovery discovery fails", async () => {
+    const journal = new LoggingJournal(record("intent_prepared"));
+    const fake = recoveryPorts({ bytes: Buffer.from(oldBytes) }, journal);
+    const locks = new Phase3ResourceLocks();
+    await expect(
+      new Phase3ApplyCoordinator({
+        ...fake,
+        locks,
+        journal: {
+          createIntent: journal.createIntent.bind(journal),
+          transition: journal.transition.bind(journal),
+          load: journal.load.bind(journal),
+          async listRecoverable() {
+            throw new Error("discovery failed");
+          },
+        },
+      }).recover(),
+    ).rejects.toThrow("discovery failed");
+    const lease = await locks.acquire("automations/other.yaml", {
+      signal: new AbortController().signal,
+      deadlineAt: Date.now() + 10_000,
+    });
+    lease.release();
+  });
+
   it("uses no-live-effect rollback completion for intent_prepared checkpoint digest", async () => {
     const { recovered, live, journal, fake } = await recover(
       "intent_prepared",

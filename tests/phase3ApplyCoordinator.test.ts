@@ -330,6 +330,60 @@ function expectRollbackTerminal(fake: ReturnType<typeof ports>): void {
 }
 
 describe("Phase 3A apply coordinator", () => {
+  it("holds the shared mutation queue through verification across different files", async () => {
+    const locks = new Phase3ResourceLocks();
+    const firstLog: string[] = [];
+    const secondLog: string[] = [];
+    const first = ports(firstLog);
+    const secondProposal = proposal({ path: "automations/other.yaml" });
+    const second = ports(secondLog, {
+      snapshots: [secondProposal, secondProposal],
+    });
+    let finishVerification!: () => void;
+    let enteredVerification!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      finishVerification = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      enteredVerification = resolve;
+    });
+    const firstApply = new Phase3ApplyCoordinator({
+      ...first,
+      locks,
+      verification: {
+        async verify() {
+          enteredVerification();
+          await paused;
+        },
+      },
+    }).apply(
+      { proposalId: proposal().proposalId, grantId: grant().grantId },
+      context(),
+    );
+    await entered;
+    const secondApply = new Phase3ApplyCoordinator({ ...second, locks }).apply(
+      {
+        proposalId: secondProposal.proposalId,
+        grantId: grant(secondProposal).grantId,
+      },
+      context(),
+    );
+    try {
+      await expect.poll(() => locks.waiterCount(secondProposal.path)).toBe(1);
+      expect(secondLog).not.toContain("source");
+      expect(secondLog).not.toContain("checkpoint");
+    } finally {
+      finishVerification();
+    }
+    const [firstResult, secondResult] = await Promise.all([
+      firstApply,
+      secondApply,
+    ]);
+    expect(firstResult.state).toBe("verification_succeeded");
+    expect(secondResult.state).toBe("verification_succeeded");
+    expect(secondLog).toContain("source");
+  });
+
   it("orders guarded apply policy, locking, approval, checkpoint, apply, reload, and verification", async () => {
     const log: string[] = [];
     const fake = ports(log);

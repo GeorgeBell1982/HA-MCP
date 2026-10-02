@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Phase2OperationContext } from "../src/phase2Contracts.js";
 import type { Phase2DurabilityPort } from "../src/proposals/durability.js";
 import {
@@ -11,6 +11,19 @@ import {
   type StoredProposal,
 } from "../src/proposals/storage.js";
 import { ProtectedPhase3ProposalAdapter } from "../src/phase3/proposalAdapter.js";
+import { ProposalService } from "../src/proposals/proposalService.js";
+import { Phase2AuditAdapter } from "../src/proposals/phase2Audit.js";
+import { ProposalCursorCodec } from "../src/proposals/cursor.js";
+import type { ProtectedIdentityRegistry } from "../src/security/repositoryBoundary.js";
+import {
+  GuardedPhase3PolicyPort,
+  InMemoryPhase3Journal,
+  Phase3ApplyCoordinator,
+} from "../src/phase3/applyCoordinator.js";
+import { InjectedApprovalGrantPort } from "../src/phase3/approval.js";
+import { Phase3ResourceLocks } from "../src/phase3/resourceLocks.js";
+import { StrictYamlPhase3Validation } from "../src/phase3/validationAdapter.js";
+import { NarrowPhase3ReloadAdapter } from "../src/phase3/reloadAdapter.js";
 
 const roots: string[] = [];
 const proposalId = "11111111-1111-4111-8111-111111111111";
@@ -88,6 +101,52 @@ describe("Phase 3B protected proposal adapter", () => {
   });
 
   it.each([
+    ["empty automation list", "[]\n"],
+    [
+      "ordinary automation list",
+      "- id: example\n  triggers: []\n  actions: []\n",
+    ],
+  ])("classifies a %s candidate", async (_name, proposedContent) => {
+    const fixture = await producerFixture();
+    const created = await fixture.service.propose(
+      { ...fixture.input, proposedContent },
+      context(),
+    );
+    expect(created).toMatchObject({
+      reloadImpact: "domain_reload",
+      reloadTarget: "automation.reload",
+    });
+  });
+
+  it("requires catalog revalidation before reload when another include transitively shares the automation file", async () => {
+    const fixture = await producerFixture(
+      "automation: !include automations.yaml\nscene: !include scenes.yaml\n",
+      { "scenes.yaml": "!include automations.yaml\n" },
+    );
+    const created = await fixture.service.propose(fixture.input, context());
+    const snapshot = await new ProtectedPhase3ProposalAdapter(
+      fixture.store,
+    ).load(created.proposalId);
+    expect(snapshot.reloadTarget).toBe("automation.reload");
+    const reload = vi.fn(async () =>
+      Object.freeze({ status: "completed" as const }),
+    );
+    const resolve = vi.fn(async () =>
+      Object.freeze({ status: "unavailable" as const }),
+    );
+    const adapter = new NarrowPhase3ReloadAdapter({ resolve }, { reload });
+    await expect(
+      adapter.reloadDomain(
+        { path: snapshot.path, target: "automation.reload" },
+        context(),
+      ),
+    ).rejects.toMatchObject({ code: "reload_unavailable" });
+    expect(resolve).toHaveBeenCalledWith("automations.yaml", expect.anything());
+    expect(reload).not.toHaveBeenCalled();
+    // Catalog is a test double: actual include-graph rejection is still a live adapter gate.
+  });
+
+  it.each([
     ["protected proposal id", stored({ protectedProposalId: otherProposalId })],
     ["idempotency key", stored({ protectedIdempotencyKey: randomUUID() })],
     ["candidate digest", stored({ publicCandidateSha256: digest("other") })],
@@ -161,6 +220,281 @@ describe("Phase 3B protected proposal adapter", () => {
     ).rejects.toThrow("identifier is invalid");
   });
 });
+
+describe("real automation proposal producer to Phase 3", () => {
+  it("persists a repository-derived target and applies through the actual adapter and policy", async () => {
+    const fixture = await producerFixture(
+      "automation: !include automations.yaml\nscript: !include scripts.yaml\nscene: !include scenes.yaml\n",
+    );
+    const created = await fixture.service.propose(fixture.input, context());
+    expect(created).toMatchObject({
+      reloadImpact: "domain_reload",
+      reloadTarget: "automation.reload",
+    });
+    const adapter = new ProtectedPhase3ProposalAdapter(fixture.store);
+    const snapshot = await adapter.load(created.proposalId);
+    expect(snapshot).toMatchObject({
+      impact: "domain_reload",
+      reloadTarget: "automation.reload",
+    });
+    await expect(
+      new GuardedPhase3PolicyPort().evaluate(snapshot),
+    ).resolves.toMatchObject({ allowed: false, code: "writes_disabled" });
+    let live = Buffer.from(fixture.source);
+    const calls: string[] = [];
+    const now = Date.now();
+    const grantId = randomUUID();
+    const coordinator = new Phase3ApplyCoordinator({
+      proposals: adapter,
+      policy: new GuardedPhase3PolicyPort({
+        writesEnabled: true,
+        applyCapability: true,
+        domainReloadCapability: true,
+      }),
+      locks: new Phase3ResourceLocks(),
+      approvals: new InjectedApprovalGrantPort([
+        {
+          grantId,
+          proposalId: snapshot.proposalId,
+          proposalStorageSha256: snapshot.proposalStorageSha256,
+          candidateSha256: snapshot.candidateSha256,
+          diffSha256: snapshot.diffSha256,
+          operation: "apply",
+          risk: snapshot.risk,
+          impact: snapshot.impact,
+          reloadTarget: snapshot.reloadTarget,
+          issuedAt: new Date(now).toISOString(),
+          expiresAt: new Date(now + 60_000).toISOString(),
+        },
+      ]),
+      source: {
+        async read() {
+          return { bytes: Uint8Array.from(live), sha256: digest(live) };
+        },
+        async readDigest() {
+          return digest(live);
+        },
+      },
+      validation: new StrictYamlPhase3Validation(),
+      checkpoints: {
+        async create() {
+          return {
+            checkpointId: randomUUID(),
+            checkpointSha256: digest(fixture.source),
+          };
+        },
+        async load() {
+          return Uint8Array.from(fixture.source);
+        },
+      },
+      atomicApply: {
+        async replace(input) {
+          live = Buffer.from(input.content);
+          return { status: "committed" };
+        },
+      },
+      reload: new NarrowPhase3ReloadAdapter(
+        {
+          async resolve(path) {
+            calls.push(`resolve:${path}`);
+            return Object.freeze({
+              status: "resolved",
+              target: "automation.reload",
+            });
+          },
+        },
+        {
+          async reload(target) {
+            calls.push(target);
+            return Object.freeze({ status: "completed" });
+          },
+        },
+      ),
+      verification: {
+        async verify() {
+          calls.push("verify");
+        },
+      },
+      journal: new InMemoryPhase3Journal(),
+    });
+    const result = await coordinator.apply(
+      { proposalId: snapshot.proposalId, grantId },
+      context(),
+    );
+    expect(result.state).toBe("verification_succeeded");
+    expect(result.reloadTarget).toBe("automation.reload");
+    expect(live.toString("utf8")).toBe(fixture.input.proposedContent);
+    expect(calls).toEqual([
+      "resolve:automations.yaml",
+      "automation.reload",
+      "verify",
+    ]);
+    expect(fixture.source.toString("utf8")).toContain("Old");
+    expect(await fixture.service.propose(fixture.input, context())).toEqual(
+      created,
+    );
+  });
+
+  it.each([
+    ["unreferenced file", "default_config:\n"],
+    ["different included file", "automation: !include other.yaml\n"],
+    ["directory include", "automation: !include_dir_merge_list automations\n"],
+    [
+      "named automation",
+      "automation: !include automations.yaml\nautomation extra: []\n",
+    ],
+    [
+      "packages",
+      "automation: !include automations.yaml\nhomeassistant:\n  packages: {}\n",
+    ],
+    [
+      "shared include",
+      "automation: !include automations.yaml\nscene: !include automations.yaml\n",
+    ],
+    [
+      "normalized shared include",
+      "automation: !include automations.yaml\nscene: !include ./automations.yaml\n",
+    ],
+    [
+      "root directory shared include",
+      "automation: !include automations.yaml\nscene: !include_dir_merge_list .\n",
+    ],
+  ])("retains restart_required for %s", async (_name, configuration) => {
+    const fixture = await producerFixture(configuration);
+    const created = await fixture.service.propose(fixture.input, context());
+    expect(created.reloadImpact).toBe("restart_required");
+    expect(created).not.toHaveProperty("reloadTarget");
+  });
+
+  it.each([
+    "value: mapping\n",
+    "- scalar\n",
+    "- action: !include actions.yaml\n",
+    "- action: !input actions\n",
+    "- action: !secret action\n",
+    "- &item {id: example}\n",
+    "- id: example\n  action: &action []\n  trigger: *action\n",
+  ])(
+    "retains restart_required for unsupported automation structure %s",
+    async (proposedContent) => {
+      const fixture = await producerFixture();
+      const created = await fixture.service.propose(
+        { ...fixture.input, proposedContent },
+        context(),
+      );
+      expect(created.reloadImpact).toBe("restart_required");
+    },
+  );
+
+  it.each(["bytes", "identity", "root", "size"] as const)(
+    "rejects %s drift on the second configuration read without storing a proposal",
+    async (drift) => {
+      const fixture = await producerFixture();
+      let configurationReads = 0;
+      const original = fixture.readContent.getMockImplementation()!;
+      fixture.readContent.mockImplementation(async (path, operation) => {
+        const result = await original(path, operation);
+        if (path !== "configuration.yaml" || ++configurationReads !== 2)
+          return result;
+        return {
+          ...result,
+          ...(drift === "bytes"
+            ? { bytes: Buffer.from("automation: !include automations.yml\n") }
+            : {}),
+          ...(drift === "size"
+            ? { bytes: Buffer.from("automation: []\n") }
+            : {}),
+          ...(drift === "identity"
+            ? { identity: { ...result.identity, inode: "999" } }
+            : {}),
+          ...(drift === "root"
+            ? { rootIdentity: { ...result.rootIdentity, inode: "999" } }
+            : {}),
+        };
+      });
+      await expect(
+        fixture.service.propose(fixture.input, context()),
+      ).rejects.toMatchObject({ code: "stale_source" });
+      expect(await fixture.store.readAll()).toEqual([]);
+    },
+  );
+});
+
+async function producerFixture(
+  configuration = "automation: !include automations.yaml\n",
+  extraFiles: Readonly<Record<string, string>> = {},
+) {
+  const root = await mkdtemp(join(tmpdir(), "phase3-producer-"));
+  roots.push(root);
+  const source = Buffer.from(
+    "- id: example\n  alias: Old\n  triggers: []\n  actions: []\n",
+  );
+  const files = new Map([
+    ["configuration.yaml", Buffer.from(configuration)],
+    ["automations.yaml", source],
+  ]);
+  for (const [path, content] of Object.entries(extraFiles))
+    files.set(path, Buffer.from(content));
+  const rootIdentity = { device: "1", inode: "1" };
+  const catalog = {
+    rootIdentity,
+    directories: [],
+    files: [...files.entries()].map(([path, bytes], index) => ({
+      path,
+      identity: { device: "1", inode: String(index + 2) },
+      size: bytes.byteLength,
+      mtimeNanoseconds: "1",
+      ctimeNanoseconds: "1",
+    })),
+  };
+  const readContent = vi.fn<ProtectedIdentityRegistry["readContent"]>(
+    async (path) => ({
+      path,
+      rootIdentity,
+      identity: catalog.files.find((file) => file.path === path)!.identity,
+      bytes: Uint8Array.from(files.get(path)!),
+    }),
+  );
+  const registry = {
+    async assertFresh() {},
+    readContent,
+    redactWholeText(text: string) {
+      return text;
+    },
+  } as unknown as ProtectedIdentityRegistry;
+  const store = new ProtectedProposalStore(
+    join(root, "store"),
+    logicalDurability,
+  );
+  const service = new ProposalService(
+    store,
+    new Phase2AuditAdapter(
+      join(root, "audit", "phase2.jsonl"),
+      {},
+      logicalDurability,
+    ),
+    registry,
+    {
+      async catalog() {
+        return catalog;
+      },
+    },
+    new ProposalCursorCodec(Buffer.alloc(32, 7), Buffer.alloc(32, 8)),
+  );
+  await service.initialize();
+  return {
+    service,
+    store,
+    source,
+    readContent,
+    input: {
+      idempotencyKey: randomUUID(),
+      path: "automations.yaml",
+      expectedSha256: digest(source),
+      proposedContent: source.toString("utf8").replace("Old", "New"),
+    },
+  };
+}
 
 async function fixture(value: StoredProposal) {
   const root = await mkdtemp(join(tmpdir(), "phase3-proposal-"));

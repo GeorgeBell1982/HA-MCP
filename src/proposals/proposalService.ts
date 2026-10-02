@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { posix } from "node:path";
 import {
   PHASE2_MAX_TEXT_BYTES,
   phase2ErrorCodes,
@@ -19,9 +20,15 @@ import {
   RepositoryBoundaryError,
   assertOperationActive,
 } from "../security/repositoryBoundary.js";
-import { validateStrictYaml, YamlGateError } from "../yaml/strictYamlGate.js";
+import {
+  validateStrictYaml,
+  validateAndProjectYaml,
+  YamlGateError,
+  type ProjectedYamlNode,
+} from "../yaml/strictYamlGate.js";
 import {
   catalogsMatchExactly,
+  type RepositoryCatalog,
   type RepositoryCatalogProvider,
 } from "../repository/repositoryReads.js";
 import {
@@ -284,6 +291,13 @@ export class ProposalService {
                 poller,
               );
               poller.finish();
+              const automationReload = await this.supportsAutomationReload(
+                parsed.data.path,
+                source.bytes,
+                candidate,
+                beforeCatalog,
+                context,
+              );
               await this.registry.assertFresh(context);
               const afterCatalog = await this.catalog.catalog(context);
               if (!catalogsMatchExactly(beforeCatalog, afterCatalog))
@@ -309,7 +323,12 @@ export class ProposalService {
                   "Validate Home Assistant configuration",
                   "Review exact protected diff before apply",
                 ],
-                reloadImpact: "restart_required",
+                reloadImpact: automationReload
+                  ? "domain_reload"
+                  : "restart_required",
+                ...(automationReload
+                  ? { reloadTarget: "automation.reload" }
+                  : {}),
                 sourceEvidence:
                   "Protected /data proposal store and /homeassistant repository snapshot",
               });
@@ -677,6 +696,95 @@ export class ProposalService {
       );
   }
 
+  private async supportsAutomationReload(
+    path: string,
+    source: Uint8Array,
+    candidate: Uint8Array,
+    catalog: RepositoryCatalog,
+    context: Phase2OperationContext,
+  ): Promise<boolean> {
+    if (path !== "automations.yaml") return false;
+    const entry = catalog.files.find(
+      (file) => file.path === "configuration.yaml",
+    );
+    if (!entry) return false;
+    const readConfiguration = async () => {
+      const read = await this.registry.readContent(
+        "configuration.yaml",
+        context,
+      );
+      if (
+        read.identity.device !== entry.identity.device ||
+        read.identity.inode !== entry.identity.inode ||
+        read.rootIdentity.device !== catalog.rootIdentity.device ||
+        read.rootIdentity.inode !== catalog.rootIdentity.inode ||
+        read.bytes.byteLength !== entry.size
+      ) {
+        read.bytes.fill(0);
+        throw error(
+          "stale_source",
+          "Automation configuration identity changed",
+        );
+      }
+      return read.bytes;
+    };
+    const configuration = await readConfiguration();
+    try {
+      const projection = await validateAndProjectYaml(configuration, context);
+      const root = projection.root;
+      if (root?.kind !== "map" || projection.metadata.aliasReferences !== 0)
+        return false;
+      const automation = root.entries.find((item) => item.key === "automation");
+      if (
+        automation?.value?.kind !== "include" ||
+        automation.value.tag !== "!include" ||
+        automation.value.value !== "automations.yaml" ||
+        root.entries.some(
+          (item) =>
+            item.key !== "automation" && /^automation\s/u.test(item.key ?? ""),
+        ) ||
+        root.entries.some(
+          (item) =>
+            item.key === "homeassistant" &&
+            (item.value?.kind !== "map" ||
+              item.value.entries.some((nested) => nested.key === "packages")),
+        ) ||
+        projection.metadata.references.filter(
+          (reference) =>
+            reference.tag !== "!secret" &&
+            posix.normalize(reference.value) === "automations.yaml",
+        ).length !== 1 ||
+        projection.metadata.references.some(
+          (reference) =>
+            reference.tag !== "!secret" &&
+            reference.tag.startsWith("!include_dir_") &&
+            posix.normalize(reference.value) === ".",
+        )
+      )
+        return false;
+      const original = await validateAndProjectYaml(source, context);
+      const proposed = await validateAndProjectYaml(candidate, context);
+      if (
+        !plainAutomationList(original.root, context) ||
+        !plainAutomationList(proposed.root, context)
+      )
+        return false;
+      const checked = await readConfiguration();
+      try {
+        if (digest(configuration) !== digest(checked))
+          throw error(
+            "stale_source",
+            "Automation configuration changed while preparing proposal",
+          );
+      } finally {
+        checked.fill(0);
+      }
+      return true;
+    } finally {
+      configuration.fill(0);
+    }
+  }
+
   private now(): number {
     return (this.hooks.now ?? Date.now)();
   }
@@ -685,6 +793,34 @@ export class ProposalService {
       throw error("service_unhealthy", "Proposal generation exhausted");
     this.generation += 1;
   }
+}
+
+function plainAutomationList(
+  root: ProjectedYamlNode | null,
+  context: Phase2OperationContext,
+): boolean {
+  if (
+    root?.kind !== "sequence" ||
+    root.items.some((item) => item.kind !== "map")
+  )
+    return false;
+  const pending: ProjectedYamlNode[] = [root];
+  while (pending.length > 0) {
+    assertOperationActive(context);
+    const node = pending.pop()!;
+    if ("anchored" in node && node.anchored) return false;
+    if (node.kind === "map") {
+      for (const entry of node.entries) {
+        if (entry.keyType !== "string") return false;
+        if (entry.value) pending.push(entry.value);
+      }
+    } else if (node.kind === "sequence") {
+      for (const item of node.items) pending.push(item);
+    } else if (node.kind !== "scalar") {
+      return false;
+    }
+  }
+  return true;
 }
 
 function completion(

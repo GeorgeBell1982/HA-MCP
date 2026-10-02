@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { Phase3ProposalPort } from "./applyCoordinator.js";
 import {
   phase3ProposalSnapshotSchema,
-  phase3ReloadTargets,
   type Phase3ReloadTarget,
 } from "./contracts.js";
 import type {
@@ -106,11 +105,7 @@ function digest(bytes: Uint8Array): string {
 
 function phase3ReloadTarget(stored: StoredProposal): Phase3ReloadTarget | null {
   if (stored.public.reloadImpact !== "domain_reload") return null;
-  const target = (stored.public as { readonly reloadTarget?: unknown })
-    .reloadTarget;
-  if ((phase3ReloadTargets as readonly unknown[]).includes(target))
-    return target as Phase3ReloadTarget;
-  return null;
+  return stored.public.reloadTarget ?? null;
 }
 
 function identityError(message: string): Phase3ProposalAdapterError {

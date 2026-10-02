@@ -447,7 +447,7 @@ export const phase3Contract = deepFreeze({
   cli: "absent" as const,
   mcpTools: "absent" as const,
   liveAdapters: "absent" as const,
-  lockScope: "validated-canonical-relative-path" as const,
+  lockScope: "shared-apply-and-recovery-queue" as const,
   restartPolicy: "never-restart" as const,
 });
 

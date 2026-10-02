@@ -2,6 +2,14 @@
 
 Risk: `HIGH`. This plan requires independent review before implementation. No phase authorizes live Home Assistant mutation, Git commit, push, deployment, or token access.
 
+Current context (2026-10-02): Phase 1 has historical live acceptance; Phase 2 is
+conditionally wired into source add-on `0.2.0`, with native aarch64 and live
+deployment gates still unverified in the retained record. Phase 3A through 3Q
+components and an isolated workflow POC are implemented but remain outside runtime
+composition. The phase descriptions and original approval points below are planning
+history; use the [current context](recovery.md#project-context-as-of-2026-10-02) and
+the requirements ledger to resume from the actual implementation boundary.
+
 ## Phase 0: decisions and environment contract
 
 1. Record confirmed target and deployment choice: Home Assistant OS 18.1, Core 2026.7.2, Supervisor 2026.06.2, Raspberry Pi 5 `aarch64`, purpose-built managed add-on, host /config exposed by the official add-on mapping as /homeassistant only after the Phase 2 security gates, storage-mode dashboards.
@@ -30,9 +38,60 @@ Slice F implementation gate: land only the unregistered fixed-operation Git brok
 
 ## Phase 3: guarded application
 
-Implement deployment validation adapter for the confirmed environment, local/HA/post-apply validators, resource locks, journaled atomic apply, non-commit backup/checkpoint, operator-controlled approval CLI/port, narrow reload adapters, WebSocket/REST verification, startup recovery, automatic scoped rollback, explicit restart gate, and separately authorized scoped commit tool. Writes remain disabled by default; disposable HA E2E precedes any production enablement.
+The independent assessment on 2026-10-02 found the transaction core proportionate,
+but approval/custody infrastructure too elaborate for one managed add-on while real
+HA integration remains incomplete. The first delivery is narrowed to one supported
+automation YAML change class, an explicitly stored `automation.reload` target, and
+one shared apply/recovery queue. Restart-required changes remain denied. Git commit,
+additional domains, restart support, and deployment generalization are outside this
+delivery.
 
-Exit: failure injection at every transaction edge, disposable E2E success/rollback, full verify, high-risk review, clean room, explicit human gate before production writes.
+Keep exact proposal/digest binding, default-disabled writes, human approval with
+short expiry and durable single-use consumption, atomic replacement, checkpoint,
+durable transaction intent, reload ambiguity tracking, rollback, startup recovery,
+and explicit manual recovery. Preserve the existing transaction state machine.
+
+Complete the following delivery gates in order:
+
+1. Global serialization: all apply, rollback, verification, and recovery use one
+   shared `Phase3ResourceLocks` instance per deployment. Implemented in source on
+   2026-10-02; this is in-process serialization, not cross-process custody.
+2. Real proposal path: extend the protected producer/schema to store a verified
+   supported target; exercise the real Phase 2 producer through the Phase 3 adapter
+   and coordinator without POC impact overrides. Candidate metadata and local seam
+   integration are implemented for the direct automation include and plain-list
+   class on 2026-10-02. Exclusivity/current-topology proof remains OPEN: the direct
+   classifier does not inspect transitive sharing through other domain includes.
+   Unsupported layouts and
+   existing restart-required proposals retain their conservative classification;
+   live mapping/semantic revalidation remains part of the next HA-boundary gate.
+3. Real HA boundaries: implement deployment-aware HA configuration validation,
+   exact domain reload, and observable post-reload verification. YAML parsing and
+   fake probes are insufficient. Invalid HA semantics must trigger rollback in a
+   disposable HA environment.
+4. Operator approval: add an explicit human approval path outside MCP-controlled
+   identity fields. Evaluate journal-backed approval consumption before adding any
+   more bespoke storage. Keep current replay protection until a replacement proves
+   expiry, exact binding, one-time use, crash recovery, and restart behavior.
+5. Retention: provide supported archive/compaction for terminal transactions and
+   associated checkpoints/approval evidence. Preserve nonterminal and manual
+   recovery state; test restart and recovery across the retention boundary. Raising
+   the existing caps alone does not solve the lifecycle gap.
+6. Disposable HA evidence: demonstrate successful real-producer apply/reload,
+   semantic-validation failure, reload/verification failure, rollback, process
+   interruption recovery, and continued use across retention limits.
+
+Freeze the separate approval custody helper, stale-stage remediation, key-sync
+protocol, and hostile injected-object defenses as isolated research. They are not
+first-delivery dependencies; do not expand or compose them without a concrete threat
+or deployment requirement. Do not delete them or weaken existing protections before
+the simpler replacement has equivalent tested guarantees.
+
+Exit: the scoped real-producer/disposable-HA workflow, crash/recovery and retention
+regressions, authoritative verification, focused independent review, and explicit
+deployment/write enablement approval. Native aarch64 execution remains a separate
+target gate. Environment isolation is required only when the evidence depends on
+packaging, bootstrap, or suspected contamination. Production writes remain disabled.
 
 ## Phase 4: structured operations and broader deployments
 

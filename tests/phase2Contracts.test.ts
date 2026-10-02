@@ -140,6 +140,31 @@ describe("Phase 2 frozen contracts", () => {
     expect(
       proposalPublicSchema.safeParse({
         ...publicProposal,
+        reloadTarget: "automation.reload",
+      }).success,
+    ).toBe(true);
+    for (const invalid of [
+      { reloadTarget: "script.reload" },
+      { reloadTarget: "automation.reload", reloadImpact: "restart_required" },
+      { reloadTarget: "automation.reload", path: "configuration.yaml" },
+    ]) {
+      expect(
+        proposalPublicSchema.safeParse({ ...publicProposal, ...invalid })
+          .success,
+      ).toBe(false);
+    }
+    expect(
+      phase2ToolInputSchemas.ha_propose_config_change.safeParse({
+        idempotencyKey,
+        path: "automations.yaml",
+        expectedSha256: sha,
+        proposedContent: "[]\n",
+        reloadTarget: "automation.reload",
+      }).success,
+    ).toBe(false);
+    expect(
+      proposalPublicSchema.safeParse({
+        ...publicProposal,
         exactCandidateBytesBase64: "eA==",
       }).success,
     ).toBe(false);
