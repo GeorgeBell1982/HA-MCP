@@ -918,6 +918,20 @@ action is to select **Custom (config.toml)** for this chat, or the documented
 human prompt acceptance remain unverified. No desktop restart, interruption of
 the other agent, fabricated approval, or live HA apply was performed.
 
+The owner's screenshot showed only Ask for approval, Approve for me and Full
+access; Custom was unavailable. After selecting Ask for approval, the next turn
+used a managed workspace-write permission profile rather than Full access.
+Two harmless checks failed at transport with HTTP `429` before any approval
+result. Desktop discovery also logged HTTP `429`. Read-only process inspection
+found one matching local bridge process; this does not identify which remote
+rate, concurrency or session gate refused the request. Source inspection shows
+that the bridge caches its initial connection promise, including a rejection,
+so retries through that bridge may retain an initial startup failure. The next
+connection recovery step is to restart only the engineering MCP server from
+Codex settings, then repeat the harmless human approval check. No process was
+stopped and no Home Assistant configuration changed. Human UI acceptance remains
+unverified.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.
