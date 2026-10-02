@@ -828,6 +828,37 @@ passed the context/diff checks, 105 focused tests and a fresh build/28-test tran
 suite. The current chat's no-effect approval check remains a separate acceptance
 step; no unspecified live proposal is authorized.
 
+### Installed 0.2.3 guarded MCP capability
+
+Source commit `dfcac11` was pushed to `main`, publishing the custom add-on manifest
+at `0.2.3`. Supervisor store refresh exceeded the CLI response timeout but completed
+server-side; a subsequent sanitized info check confirmed latest `0.2.3`. The
+authorized app update with `--backup` completed successfully. Installed image is
+`sha256:96a4cd5d2902ec04e431f59e1ea5f9c192b06693bd70452ddca7956712d13ae5`.
+
+The existing app options were preserved and `enable_mcp_writes` set true through
+the authenticated Supervisor API, followed by restart of only the MCP app. The
+actual Node server process environment confirms add-on mode, Phase 2 enabled,
+guarded MCP writes enabled, generic writes/restart/deletes false. Ingress health
+and Supervisor Core config both returned HTTP 200; Core `2026.9.4` is `RUNNING`.
+The first process-env probe selected PID 1 rather than the actual Node server and
+therefore lacked the exported add-on configuration; the corrected server-process
+probe passed. No runtime credential was printed.
+
+A fresh SDK client through the rebuilt pinned stdio bridge retrieved **29 tools**,
+including apply/rotate with `readOnlyHint: false` and the harmless approval check
+with `readOnlyHint: true`. A host advertising no elicitation received
+`chat_approval_unavailable` from the installed check tool, request ID
+`3849d508-7a86-4809-a22d-b289af5c2675`, before any configuration/grant access.
+The local Codex MCP configuration now permits 360 seconds per tool call so human
+approval and bounded application are not cut off by a shorter host default.
+
+This active turn still has no refreshed engineering tool inventory after the
+connection/configuration changes, so an actual current-chat human approval prompt
+has **not** been tested. Refresh/reconnect of that inventory is the remaining
+acceptance step; the no-effect approval check must succeed here before applying a
+live proposal. No live config proposal, recovery or HA reload was performed.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

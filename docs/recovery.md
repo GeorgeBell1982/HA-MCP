@@ -15,12 +15,17 @@ approval through the originating client's form UI.
 ## Project context as of 2026-10-02
 
 Latest requested extension: the owner wants MCP changes with approval in this
-chat. Release `0.2.3` adds the opt-in guarded automation apply, completed epoch
+chat. Release `0.2.3` is published and installed with guarded MCP writes enabled.
+It adds the opt-in guarded automation apply, completed epoch
 archive, and harmless approval display check. The bridge relays form elicitation
 and never retries mutations after an uncertain session response. Source, fixture
 and deployed acceptance evidence are recorded separately in the ledger. This
-supersedes the historical terminal-only MCP restriction described below. No
-unspecified live proposal is authorized by the feature request.
+supersedes the historical terminal-only MCP restriction described below. All 1,373
+tests and 27 disposable native/real HA checks on amd64 and Pi arm64 passed, and
+independent review approved the change. Installed health and 29-tool inventory
+passed; unsupported hosts refuse approval. The current chat's tool inventory must
+refresh/reconnect before its no-effect approval prompt can be tested. No live
+proposal has been applied or authorized by the feature request.
 
 Phase 3 scope was narrowed following the independent proportionality review on the
 same date. The direct automation proposal path, complete topology admission, real

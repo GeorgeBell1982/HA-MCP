@@ -15,6 +15,11 @@ and network options. Installation expands filesystem permissions; no proposal
 is automatically applied. Native Pi disposable workflow evidence is recorded in
 the requirements ledger; actual production deployment is recorded separately.
 
+The owner's Pi is now running `0.2.3` with guarded MCP writes explicitly enabled.
+Installed health and guarded tool inventory passed. Actual current-chat approval
+display remains to be checked after its MCP inventory refreshes; this is distinct
+from simulated fixture approvals and does not authorize a live proposal.
+
 1. Use the published add-on repository URL:
    `https://github.com/GeorgeBell1982/HA-MCP`.
 2. In **Settings > Apps > App store > Repositories**, add that repository URL.
