@@ -5,8 +5,8 @@ export interface AuditRecord {
   timestamp: string;
   tool: string;
   requestId: string;
-  result: "success" | "failure";
-  risk: "read-only";
+  result: "attempt" | "success" | "failure";
+  risk: "read-only" | "guarded-write";
   error?: string;
 }
 export class JsonlAudit {

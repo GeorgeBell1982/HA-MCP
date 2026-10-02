@@ -4,14 +4,23 @@
 - Token expired: replace the local secret or restart the add-on so Supervisor injects the current runtime token. Diagnostics never print it.
 - HTTP identity changed: do not bypass pinning; use authenticated ingress to download and verify the new public certificate, then update bridge pins.
 - Phase 2 activation failure: the runtime falls back to Phase 1 tools with sanitized activation diagnostics. Investigate the failed artifact, protected state, secrets, or catalog gate before expecting repository/proposal tools.
-- Apply, reload, rollback, and crash recovery are not exposed by the MCP runtime. The isolated Phase 3 components and POC do not provide production recovery authority.
+- Guarded MCP apply in `0.2.3` requires explicit add-on opt-in and exact-diff form approval. Unsupported approval fails closed. Manual recovery remains local; inspect uncertain transactions before another apply.
 
 Before operator effects, keep a Home Assistant backup outside the Pi and test
 restoration or explicitly record the deployment owner's waiver. The current owner
-has downloaded a backup on their phone and waived restore testing. MCP writes
-remain disabled; each local effect requires its write flag and typed approval.
+has downloaded a backup on their phone and waived restore testing. Each local
+effect requires its write flag and typed approval; each opted-in MCP apply requires
+approval through the originating client's form UI.
 
 ## Project context as of 2026-10-02
+
+Latest requested extension: the owner wants MCP changes with approval in this
+chat. Release `0.2.3` adds the opt-in guarded automation apply, completed epoch
+archive, and harmless approval display check. The bridge relays form elicitation
+and never retries mutations after an uncertain session response. Source, fixture
+and deployed acceptance evidence are recorded separately in the ledger. This
+supersedes the historical terminal-only MCP restriction described below. No
+unspecified live proposal is authorized by the feature request.
 
 Phase 3 scope was narrowed following the independent proportionality review on the
 same date. The direct automation proposal path, complete topology admission, real

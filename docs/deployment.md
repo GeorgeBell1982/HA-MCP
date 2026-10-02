@@ -3,12 +3,14 @@
 The supported Phase 1 target is Home Assistant OS 18.1 on Raspberry Pi 5
 (`aarch64`). No host shell is needed.
 
-Source release `0.2.2` permits the guarded local operator with a writable
-configuration mapping. MCP tools remain read-only; local apply/recovery still
-require `--enable-writes`, a real terminal and exact typed approval. Home
+Source release `0.2.3` adds optional chat-approved MCP automation application with
+`enable_mcp_writes: false` by default. Enable it only with Phase 2 active and trusted
+paired clients. Run `ha_check_approval` to prove the host displays form elicitation
+before applying a proposal. Local apply/recovery still require `--enable-writes`,
+a real terminal and exact typed approval. Home
 Assistant builds this add-on locally on the Pi; no prebuilt `image` is configured.
-Refresh the repository in the App store, confirm version `0.2.2`, and install or
-update it only when local operator capability is wanted. Keep existing pairing
+Refresh the repository in the App store, confirm version `0.2.3`, and install or
+update it when guarded application capability is wanted. Keep existing pairing
 and network options. Installation expands filesystem permissions; no proposal
 is automatically applied. Native Pi disposable workflow evidence is recorded in
 the requirements ledger; actual production deployment is recorded separately.

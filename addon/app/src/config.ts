@@ -12,6 +12,7 @@ const schema = z.object({
   HA_AUDIT_LOG_PATH: z.string().default("./data/audit.jsonl"),
   HA_ENABLE_HTTP: bool,
   HA_ENABLE_PHASE2: bool,
+  HA_ENABLE_MCP_WRITES: bool,
   HA_ENABLE_WRITES: bool,
   HA_ENABLE_RESTART: bool,
   HA_ENABLE_DELETES: bool,
@@ -23,6 +24,7 @@ export interface Config {
   auditPath: string;
   enableHttp: boolean;
   enablePhase2: boolean;
+  enableMcpWrites: boolean;
   enableWrites: false;
   enableRestart: false;
   enableDeletes: false;
@@ -67,6 +69,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     auditPath: d.HA_AUDIT_LOG_PATH,
     enableHttp: d.HA_ENABLE_HTTP,
     enablePhase2: d.HA_MODE === "addon" && d.HA_ENABLE_PHASE2,
+    enableMcpWrites:
+      d.HA_MODE === "addon" && d.HA_ENABLE_PHASE2 && d.HA_ENABLE_MCP_WRITES,
     enableWrites: false,
     enableRestart: false,
     enableDeletes: false,
@@ -77,11 +81,17 @@ export function publicPolicy(
   runtime: {
     readonly phase2Active?: boolean;
     readonly configMapping?: boolean;
+    readonly mcpWritesActive?: boolean;
   } = {},
 ) {
   return {
     transport: { stdio: true, httpEnabled: env.HA_ENABLE_HTTP === "true" },
     mutations: { writes: false, restart: false, deletes: false },
+    guardedMcpApply: runtime.mcpWritesActive === true,
+    guardedMcpApplyRequested:
+      env.HA_MODE === "addon" &&
+      env.HA_ENABLE_PHASE2 === "true" &&
+      env.HA_ENABLE_MCP_WRITES === "true",
     configMapping: runtime.configMapping === true,
     phase2Enabled: runtime.phase2Active === true,
     phase2Requested: env.HA_MODE === "addon" && env.HA_ENABLE_PHASE2 === "true",

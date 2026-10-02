@@ -10,6 +10,8 @@ import {
   runPhase3OperatorCommand,
   assertPhase3BootstrapParentIsFresh,
   phase3OperatorFailureDetails,
+  completePhase3Cleanup,
+  Phase3OperatorCleanupUncertain,
 } from "../src/phase3/operatorRuntime.js";
 import {
   Phase3OperatorAuditUncertain,
@@ -35,6 +37,35 @@ afterEach(async () => {
   );
 });
 describe("explicit Phase 3 operator command boundary", () => {
+  it.each([0, 1, 2, 3])(
+    "attempts every cleanup when cleanup %s fails, with lease release last",
+    async (failure) => {
+      const calls: number[] = [];
+      expect(
+        await completePhase3Cleanup(
+          [0, 1, 2, 3].map((index) => async () => {
+            calls.push(index);
+            if (index === failure) throw new Error("cleanup");
+          }),
+        ),
+      ).toBe(false);
+      expect(calls).toEqual([0, 1, 2, 3]);
+    },
+  );
+  it("preserves settled identity when cleanup failed after an effect", () => {
+    expect(
+      phase3OperatorFailureDetails(
+        new Phase3OperatorCleanupUncertain(
+          proposalId,
+          "verification_succeeded",
+        ),
+      ),
+    ).toEqual({
+      code: "post_settlement_cleanup_uncertain",
+      transactionId: proposalId,
+      state: "verification_succeeded",
+    });
+  });
   it.each(["init", "rotate", "resume"])(
     "accepts explicit offline %s without enabling live writes",
     (operation) => {

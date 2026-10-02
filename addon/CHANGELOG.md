@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3
+
+- Add opt-in MCP application of pending automation proposals with exact-diff human approval through form elicitation. Unsupported or declined approvals fail closed.
+- Reuse guarded validation, checkpoint, automation reload, rollback and verification. Add state-only transaction archive and a harmless chat approval check.
+- Relay approval prompts through the local bridge and prevent mutation replay after a lost or expired session response. MCP writes default off; manual recovery and initialization remain terminal-only.
+
 ## 0.2.2
 
 - Permit the guarded local terminal operator by mapping Home Assistant configuration writable. Installing this version expands container filesystem permissions.

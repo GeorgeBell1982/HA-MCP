@@ -6,6 +6,7 @@ key=/data/tls/server.key
 export HA_MODE=addon
 export HA_ENABLE_HTTP="$(bashio::config 'enable_http')"
 export HA_ENABLE_PHASE2="$(bashio::config 'enable_phase2')"
+export HA_ENABLE_MCP_WRITES="$(bashio::config 'enable_mcp_writes')"
 export HA_HTTP_BIND="$(bashio::config 'bind')"
 export HA_HTTP_PORT=8443
 export HA_HTTP_ALLOWED_HOST="$(bashio::config 'allowed_host')"

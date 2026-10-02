@@ -56,12 +56,12 @@ describe("Phase 3A through Phase 3Q isolation", () => {
     const phase1Names = ReadTools.prototype.names.call({});
     expect(phase1Names.some((name) => name.includes("phase3"))).toBe(false);
     expect(phase2ToolNames.some((name) => name.includes("phase3"))).toBe(false);
-    expect(phase3Contract.registered).toBe(false);
+    expect(phase3Contract.registered).toBe("managed-addon-opt-in");
     expect(phase3Contract.writesEnabled).toBe(false);
-    expect(phase3Contract.liveAdapters).toBe("local-operator-only");
+    expect(phase3Contract.liveAdapters).toBe("local-operator-and-guarded-mcp");
   });
 
-  it("keeps the Phase 3B through Phase 3Q adapters out of runtime composition", () => {
+  it("keeps direct effect and key adapters behind the guarded Phase 3 composition", () => {
     for (const path of [
       "src/index.ts",
       "src/application.ts",
@@ -109,6 +109,18 @@ describe("Phase 3A through Phase 3Q isolation", () => {
       expect(source).not.toContain("synchronizeExistingPhase3ApprovalKey");
       expect(source).not.toContain("Phase3ApprovalKeySyncLease");
     }
+  });
+
+  it("composes MCP writes only through the explicit opt-in registry", () => {
+    const entry = readFileSync("src/index.ts", "utf8");
+    expect(entry).toContain("buildPhase3McpRegistry(");
+    const registry = readFileSync("src/phase3/mcpTools.ts", "utf8");
+    expect(registry).toContain("!config.enableMcpWrites");
+    expect(registry).toContain("!phase2Active");
+    expect(registry).toContain("!context?.requestApproval");
+    expect(registry).not.toContain("approvalKey");
+    expect(registry).not.toContain("atomicApply");
+    expect(registry).not.toContain("approveAndRecover");
   });
 
   it("limits basic approval key composition to the explicit local operator", () => {

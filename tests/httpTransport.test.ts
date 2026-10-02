@@ -14,6 +14,9 @@ import { generateOrRotateTlsIdentity } from "../src/security/tls.js";
 import { certificateFingerprint } from "../src/security/tls.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
+import type { ToolRegistry } from "../src/toolRegistry.js";
 const servers: Server[] = [];
 const execFileAsync = promisify(execFile);
 afterEach(async () =>
@@ -30,6 +33,193 @@ async function freePort() {
   return a.port;
 }
 describe("TLS Streamable HTTP MCP", () => {
+  it("relays exact form approval from the originating HTTPS tool call through the real built stdio bridge", async () => {
+    const root = await mkdtemp(join(tmpdir(), "http-approval-"));
+    const certPath = join(root, "cert.pem"),
+      keyPath = join(root, "key.pem"),
+      credentialFile = join(root, "credential");
+    await generateOrRotateTlsIdentity({
+      certPath,
+      keyPath,
+      openssl:
+        process.platform === "win32"
+          ? "C:/Program Files/Git/mingw64/bin/openssl.exe"
+          : "openssl",
+      subjectAltName: "IP:127.0.0.1",
+    });
+    const cert = await readFile(certPath, "utf8"),
+      key = await readFile(keyPath, "utf8");
+    const pairings = new PairingStore(),
+      pairing = await pairings.pair();
+    await writeFile(credentialFile, pairing.bearer, { mode: 0o600 });
+    await chmod(credentialFile, 0o600);
+    const port = await freePort();
+    const confirmation =
+      "APPLY 11111111-1111-4111-8111-111111111111 " + "a".repeat(64);
+    let effects = 0,
+      approvals = 0,
+      approvalContexts = 0,
+      rotations = 0;
+    const tools: ToolRegistry = {
+      names: () => ["ha_apply_proposal", "ha_rotate_epoch"],
+      descriptor: () => tools.descriptors()[0],
+      descriptors: () => [
+        {
+          name: "ha_apply_proposal",
+          description: "Disposable transport fixture",
+          inputSchema: z.object({}).strict(),
+          annotations: { readOnlyHint: false, idempotentHint: false },
+        },
+        {
+          name: "ha_rotate_epoch",
+          description: "Disposable state mutation fixture",
+          inputSchema: z.object({}).strict(),
+          annotations: { readOnlyHint: false, idempotentHint: false },
+        },
+      ],
+      async call(name, _input, context) {
+        if (name === "ha_rotate_epoch") {
+          rotations++;
+          return { ok: true, requestId: "rotation" };
+        }
+        if (!context?.requestApproval)
+          return { ok: false, requestId: "fixture" };
+        approvalContexts++;
+        try {
+          const answer = await context.requestApproval({
+            message: "Exact disposable diff",
+            confirmation,
+            signal: context.signal,
+            deadlineAt: Date.now() + 5000,
+          });
+          if (answer !== confirmation)
+            return { ok: false, requestId: "fixture" };
+          effects++;
+          return { ok: true, requestId: "fixture" };
+        } catch {
+          return { ok: false, requestId: "fixture" };
+        }
+      },
+    };
+    const server = await startMcpHttps({
+      bind: "127.0.0.1",
+      port,
+      allowedHost: `127.0.0.1:${port}`,
+      certificate: cert,
+      privateKey: key,
+      pairings,
+      tools,
+    });
+    servers.push(server);
+    const inherited = Object.fromEntries(
+      Object.entries(process.env).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [join(process.cwd(), "dist/bridge.js")],
+      env: {
+        ...inherited,
+        HA_MCP_URL: `https://127.0.0.1:${port}/mcp`,
+        HA_MCP_CREDENTIAL_FILE: credentialFile,
+        HA_MCP_CA_FILE: certPath,
+        HA_MCP_CERT_SHA256: certificateFingerprint(cert),
+        NODE_EXTRA_CA_CERTS: certPath,
+      },
+      stderr: "pipe",
+    });
+    const client = new Client(
+      { name: "approval-host", version: "1" },
+      { capabilities: { elicitation: { form: {} } } },
+    );
+    client.setRequestHandler(ElicitRequestSchema, async (request) => {
+      approvals++;
+      expect(request.params.mode).toBe("form");
+      expect(request.params.message).toContain(confirmation);
+      return { action: "accept", content: { confirmation } };
+    });
+    try {
+      await client.connect(transport);
+      expect((await client.listTools()).tools[0]?.annotations).toMatchObject({
+        readOnlyHint: false,
+        idempotentHint: false,
+      });
+      expect(
+        (await client.callTool({ name: "ha_apply_proposal", arguments: {} }))
+          .isError,
+      ).toBe(false);
+      expect({ effects, approvals, approvalContexts }).toEqual({
+        effects: 1,
+        approvals: 1,
+        approvalContexts: 1,
+      });
+    } finally {
+      await client.close();
+    }
+    const unsupportedTransport = new StdioClientTransport({
+      command: process.execPath,
+      args: [join(process.cwd(), "dist/bridge.js")],
+      env: {
+        ...inherited,
+        HA_MCP_URL: `https://127.0.0.1:${port}/mcp`,
+        HA_MCP_CREDENTIAL_FILE: credentialFile,
+        HA_MCP_CA_FILE: certPath,
+        HA_MCP_CERT_SHA256: certificateFingerprint(cert),
+        NODE_EXTRA_CA_CERTS: certPath,
+      },
+      stderr: "pipe",
+    });
+    const unsupported = new Client({ name: "unsupported-host", version: "1" });
+    try {
+      await unsupported.connect(unsupportedTransport);
+      expect(
+        (
+          await unsupported.callTool({
+            name: "ha_apply_proposal",
+            arguments: {},
+          })
+        ).isError,
+      ).toBe(true);
+      expect({ effects, approvals, approvalContexts }).toEqual({
+        effects: 1,
+        approvals: 1,
+        approvalContexts: 1,
+      });
+    } finally {
+      await unsupported.close();
+    }
+    // Settle a real HTTPS state mutation, then hide its response behind a 404.
+    // The bridge must surface uncertainty without replaying the request.
+    const preload = `const original = globalThis.fetch; let hidden = false; globalThis.fetch = async (input, init) => { const response = await original(input, init); if (!hidden && typeof init?.body === "string" && JSON.parse(init.body).method === "tools/call") { hidden = true; await response.text(); return new Response("lost settled response", {status: 404}); } return response; };`;
+    const lostTransport = new StdioClientTransport({
+      command: process.execPath,
+      args: [
+        "--import",
+        `data:text/javascript,${encodeURIComponent(preload)}`,
+        join(process.cwd(), "dist/bridge.js"),
+      ],
+      env: {
+        ...inherited,
+        HA_MCP_URL: `https://127.0.0.1:${port}/mcp`,
+        HA_MCP_CREDENTIAL_FILE: credentialFile,
+        HA_MCP_CA_FILE: certPath,
+        HA_MCP_CERT_SHA256: certificateFingerprint(cert),
+        NODE_EXTRA_CA_CERTS: certPath,
+      },
+      stderr: "pipe",
+    });
+    const lostClient = new Client({ name: "lost-response-host", version: "1" });
+    try {
+      await lostClient.connect(lostTransport);
+      await expect(
+        lostClient.callTool({ name: "ha_rotate_epoch", arguments: {} }),
+      ).rejects.toThrow();
+      expect(rotations).toBe(1);
+    } finally {
+      await lostClient.close();
+    }
+  }, 20_000);
   it("initializes with auth and hides sessions from another client", async () => {
     const root = await mkdtemp(join(tmpdir(), "http-mcp-"));
     const certPath = join(root, "c.pem");

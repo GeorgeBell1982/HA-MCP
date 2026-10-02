@@ -42,6 +42,9 @@ export const mainWorkerRows = Object.freeze([
   "actual-wrapper-blocks-epoch-reuse-rotates-and-applies-next-proposal",
   "actual-wrapper-pty-confirmed-recovery-and-audit",
   "actual-wrapper-existing-epoch-missing-key-refuses-without-replacement",
+  "native-mcp-fixture-decline-and-cancellation-before-effect",
+  "native-mcp-fixture-approved-real-producer-apply-and-loaded-ha-proof",
+  "native-mcp-fixture-rotation-preserves-live-config-and-reload-count",
 ]);
 export const readonlyWorkerRows = Object.freeze([
   "actual-wrapper-readonly-mount-refuses-apply-and-recovery-before-grant-or-audit",

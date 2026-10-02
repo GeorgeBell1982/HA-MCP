@@ -40,6 +40,16 @@ Slice F implementation gate: land only the unregistered fixed-operation Git brok
 
 ## Phase 3: guarded application
 
+Owner-authorized extension on 2026-10-02: expose guarded application through MCP
+with approval in the originating chat. Reuse the existing exact proposal display,
+fresh reread, internal grant, OS lease, coordinator and protected lifecycle. Add
+form elicitation relay, fail-closed capability/cancellation handling and no replay
+of mutations. Keep the new add-on switch off by default, and keep initialization
+and manual recovery local. Prove both the full bridge transport and disposable
+native/real HA path; use a no-effect approval check to verify this host's actual UI
+before any live application. This explicitly replaces the earlier terminal-only
+delivery restriction, without expanding into generic service or file operations.
+
 The independent assessment on 2026-10-02 found the transaction core proportionate,
 but approval/custody infrastructure too elaborate for one managed add-on while real
 HA integration remains incomplete. The first delivery is narrowed to one supported

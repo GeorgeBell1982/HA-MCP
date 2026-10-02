@@ -9,6 +9,7 @@ import {
 } from "../src/phase3/contracts.js";
 import {
   approveAndApplyProposal,
+  approveAndApplyMcpProposal,
   createPhase3OperatorTerminal,
   type Phase3OperatorApprovalPorts,
   type Phase3OperatorAuditRecord,
@@ -92,6 +93,75 @@ function fixture() {
   };
   return { proposal, ports, records, issue, apply, write };
 }
+
+describe("MCP Phase 3 human approval", () => {
+  it("uses the originating approval callback with the exact redacted display and no terminal", async () => {
+    const f = fixture();
+    const request = vi.fn(
+      async ({ confirmation }: { confirmation: string }) => confirmation,
+    );
+    expect(
+      await approveAndApplyMcpProposal(proposalId, f.ports, context(), request),
+    ).toMatchObject({ state: "verification_succeeded" });
+    expect(f.write).not.toHaveBeenCalled();
+    const displayed = request.mock.calls[0]![0] as {
+      confirmation: string;
+      message?: string;
+    };
+    expect(displayed.message).toContain("[REDACTED]");
+    expect(displayed.message).not.toContain("secret-value");
+    expect(displayed.confirmation).toBe(
+      `APPLY ${proposalId} ${f.proposal.proposalStorageSha256}`,
+    );
+    expect(f.issue).toHaveBeenCalledOnce();
+    expect(f.apply).toHaveBeenCalledOnce();
+  });
+  it.each(["decline", "cancel", "timeout", "unsupported"])(
+    "refuses %s before issuing any grant",
+    async (reason) => {
+      const f = fixture();
+      await expect(
+        approveAndApplyMcpProposal(proposalId, f.ports, context(), async () => {
+          throw new Error(reason);
+        }),
+      ).rejects.toThrow(reason);
+      expect(f.issue).not.toHaveBeenCalled();
+      expect(f.apply).not.toHaveBeenCalled();
+    },
+  );
+  it("rereads the proposal after human acceptance and rejects intervening changes", async () => {
+    const f = fixture();
+    await expect(
+      approveAndApplyMcpProposal(
+        proposalId,
+        f.ports,
+        context(),
+        async ({ confirmation }) => {
+          f.proposal.candidateSha256 = sha256("changed");
+          return confirmation;
+        },
+      ),
+    ).rejects.toMatchObject({ code: "proposal_changed_after_display" });
+    expect(f.issue).not.toHaveBeenCalled();
+    expect(f.apply).not.toHaveBeenCalled();
+  });
+  it("rejects cancellation arriving with an accepted response", async () => {
+    const f = fixture();
+    const abort = new AbortController();
+    await expect(
+      approveAndApplyMcpProposal(
+        proposalId,
+        f.ports,
+        { signal: abort.signal, deadlineAt: Date.now() + 10000 },
+        async ({ confirmation }) => {
+          abort.abort();
+          return confirmation;
+        },
+      ),
+    ).rejects.toMatchObject({ code: "operation_inactive" });
+    expect(f.issue).not.toHaveBeenCalled();
+  });
+});
 
 describe("local Phase 3 human approval", () => {
   it("displays exact identity and sanitized redacted diff, then issues and applies internally", async () => {

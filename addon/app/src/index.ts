@@ -12,6 +12,7 @@ import { startMcpHttps } from "./http.js";
 import { ensureTlsIdentity } from "./security/tls.js";
 import { buildPhase2Registry } from "./phase2Activation.js";
 import { CompositeToolRegistry } from "./toolRegistry.js";
+import { buildPhase3McpRegistry } from "./phase3/mcpTools.js";
 const config = loadConfig(process.env);
 const audit = new JsonlAudit(config.auditPath);
 await audit.health();
@@ -29,8 +30,17 @@ const phase2Tools = await buildPhase2Registry({
     );
   },
 });
+const phase3Tools = buildPhase3McpRegistry(
+  config,
+  phase2Tools !== undefined,
+  audit,
+);
 const tools = phase2Tools
-  ? new CompositeToolRegistry([phase1Tools, phase2Tools])
+  ? new CompositeToolRegistry([
+      phase1Tools,
+      phase2Tools,
+      ...(phase3Tools ? [phase3Tools] : []),
+    ])
   : phase1Tools;
 if (config.mode === "addon") {
   const store = new PairingStore(Number(process.env.HA_MAX_CLIENTS ?? 16));

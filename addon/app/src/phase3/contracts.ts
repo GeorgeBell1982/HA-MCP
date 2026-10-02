@@ -441,14 +441,18 @@ export const phase3RecoveryTable = deepFreeze({
 } as const);
 
 export const phase3Contract = deepFreeze({
-  registered: false,
+  registered: "managed-addon-opt-in" as const,
   adapterNeutral: true,
   writesEnabled: false,
   operatorWritesRequire: "explicit-flag-and-local-tty" as const,
-  grantProducer: "local-tty-only" as const,
+  grantProducer: "local-tty-or-originating-mcp-form" as const,
   cli: "explicit-local-operator" as const,
-  mcpTools: "absent" as const,
-  liveAdapters: "local-operator-only" as const,
+  mcpTools: [
+    "ha_apply_proposal",
+    "ha_rotate_epoch",
+    "ha_check_approval",
+  ] as const,
+  liveAdapters: "local-operator-and-guarded-mcp" as const,
   lockScope: "shared-apply-and-recovery-queue" as const,
   restartPolicy: "never-restart" as const,
 });

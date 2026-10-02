@@ -7,8 +7,9 @@ the [requirements ledger](requirements-ledger.md#phase-3-proportionality-review-
 The [implementation plan](implementation-plan.md#phase-3-guarded-application) defines
 the narrowed first delivery. The core transaction guarantees below remain required;
 later custody/key contracts describe isolated research, not prerequisites for that
-delivery. The explicit local operator CLI now composes the narrowed workflow;
-MCP/default writes remain disabled. Local operator deployment was explicitly
+delivery. The explicit local operator CLI composes the narrowed workflow;
+`0.2.3` also composes guarded MCP apply behind explicit opt-in and originating
+form approval. Default writes remain disabled. Local operator deployment was explicitly
 authorized and completed in `0.2.2`; each production apply/recovery still requires
 its own exact typed terminal approval. See the
 [installed enablement record](requirements-ledger.md#installed-022-operator-enablement-on-2026-10-02).
@@ -57,14 +58,17 @@ store, adapter, policy, strict YAML validator, and narrow reload adapter, but fa
 filesystem reads and live-effect/HA boundaries. It proves local integration, not
 native confinement, actual HA reload, or production safety.
 
-Phase 3A remains an unregistered, adapter-neutral core. No MCP apply/recovery/grant
-tool is registered. `phase3Contract.writesEnabled: false` describes MCP/default
-policy; the separate Linux add-on operator CLI requires the literal per-command
+Phase 3A remains an adapter-neutral core. The managed add-on can register
+`ha_apply_proposal`, `ha_rotate_epoch` and `ha_check_approval` only with active
+Phase 2 and `enable_mcp_writes: true`. The apply accepts only a proposal ID and
+requires exact-diff human approval via form elicitation; grants remain internal.
+No MCP recovery or grant-issuance tool exists. `phase3Contract.writesEnabled: false`
+describes default policy; the separate Linux add-on operator CLI requires the literal per-command
 `--enable-writes` flag and both input/output TTYs before composing a write policy.
-Environment write flags still cannot enable the server. Add-on `0.2.2` maps
+Legacy generic environment write flags still cannot enable the server. Add-on `0.2.2` maps
 `/homeassistant` writable to permit the explicit local operator. Earlier `0.2.1`
 maps it read-only and refuses apply/recovery before approval consumption. Release
-installation never applies a proposal; exact local approval remains required.
+installation never applies a proposal; exact approval remains required.
 
 ## Local operator and epoch lifecycle
 

@@ -1,5 +1,17 @@
 # Security contract
 
+Current guarded MCP application is an explicit exception to the historical
+read-only inventories below. Add-on `0.2.3` defaults `enable_mcp_writes` off and
+requires managed add-on mode plus successful Phase 2 activation. The only live
+write is application of a stored automation proposal, approved via form elicitation
+bound to the originating MCP request/session. Tool arguments cannot supply approval.
+Exact display/identity are reread after approval; the existing protected single-use
+grant, OS lease, audit, checkpoint, validation, rollback and verification apply.
+Mutations are not replayed by the bridge. All paired clients with this capability
+are trusted to present human approval honestly; this is not a human identity proof.
+The approval check makes no HA changes, and epoch rotation changes only protected
+transaction state. Manual recovery remains terminal-only.
+
 Phase 1 is read-only. The add-on requests only `homeassistant_api`, has no `/config`
 mapping, and the MCP inventory contains no mutation, restart, delete, generic service,
 shell, file, or Git capability.

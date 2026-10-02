@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ReadStream, WriteStream } from "node:tty";
+import type { ToolCallContext } from "../toolRegistry.js";
 import type { ProtectedProposalStore } from "../proposals/storage.js";
 import type { ProtectedIdentityRegistry } from "../security/repositoryBoundary.js";
 import type { DurablePhase3ApprovalGrants } from "./durableApproval.js";
@@ -85,6 +86,46 @@ export async function approveAndApplyProposal(
 ) {
   if (!ports.terminal.inputIsTTY || !ports.terminal.outputIsTTY)
     throw new Phase3OperatorError("interactive_terminal_required");
+  return approveProposal(
+    proposalId,
+    ports,
+    context,
+    async (display, confirmation) => {
+      await ports.terminal.write(
+        `${display}\nType exactly ${confirmation}\n> `,
+      );
+      return () => ports.terminal.readConfirmation(context);
+    },
+  );
+}
+
+/** The callback comes from the originating MCP transport, never from tool input. */
+export async function approveAndApplyMcpProposal(
+  proposalId: string,
+  ports: Omit<Phase3OperatorApprovalPorts, "terminal">,
+  context: Phase3OperationContext,
+  requestApproval: NonNullable<ToolCallContext["requestApproval"]>,
+) {
+  return approveProposal(proposalId, ports, context, (display, confirmation) =>
+    Promise.resolve(() =>
+      requestApproval({
+        message: display,
+        confirmation,
+        ...context,
+      }),
+    ),
+  );
+}
+
+async function approveProposal(
+  proposalId: string,
+  ports: Omit<Phase3OperatorApprovalPorts, "terminal">,
+  context: Phase3OperationContext,
+  displayApproval: (
+    display: string,
+    confirmation: string,
+  ) => Promise<() => Promise<string>>,
+) {
   active(context);
   z.string().uuid().parse(proposalId);
   const attemptId = randomUUID();
@@ -105,12 +146,10 @@ export async function approveAndApplyProposal(
     };
     active(context);
     const confirmation = `APPLY ${proposalId} ${first.proposal.proposalStorageSha256}`;
-    await ports.terminal.write(
-      `${first.display}\nType exactly ${confirmation}\n> `,
-    );
+    const readConfirmation = await displayApproval(first.display, confirmation);
     await ports.audit.append({ ...displayEvidence, event: "displayed" });
     active(context);
-    const answer = await ports.terminal.readConfirmation(context);
+    const answer = await readConfirmation();
     active(context);
     if (answer !== confirmation)
       throw new Phase3OperatorError("confirmation_rejected");
@@ -174,7 +213,7 @@ export async function approveAndApplyProposal(
 
 async function displaySnapshot(
   proposalId: string,
-  ports: Phase3OperatorApprovalPorts,
+  ports: Omit<Phase3OperatorApprovalPorts, "terminal">,
   context: Phase3OperationContext,
 ) {
   active(context);

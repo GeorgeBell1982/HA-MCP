@@ -45,6 +45,33 @@ function connections(plans: ConnectionPlan[]) {
 const expired = () => new StreamableHTTPError(404, "expired session");
 
 describe("RemoteSession", () => {
+  it("never reconnects or replays a mutation after an ambiguous settled HTTP 404", async () => {
+    const setup = connections([
+      { sessionId: "current" },
+      { sessionId: "replacement" },
+    ]);
+    const remote = await RemoteSession.connect(setup.factory);
+    let effects = 0;
+    await expect(
+      remote.run(
+        async () => {
+          effects++;
+          throw expired();
+        },
+        { retryExpiredSession: false },
+      ),
+    ).rejects.toMatchObject({ code: 404 });
+    expect(effects).toBe(1);
+    expect(setup.counts()).toEqual({ created: 1, connected: 1, closed: [] });
+    await expect(
+      remote.run(async (client) => {
+        if (client.id === 0) throw expired();
+        return "read";
+      }),
+    ).resolves.toBe("read");
+    expect(effects).toBe(1);
+    await remote.close();
+  });
   it("waits for an in-flight operation, closes once, and rejects later work", async () => {
     const setup = connections([{ sessionId: "current" }]);
     const remote = await RemoteSession.connect(setup.factory);

@@ -50,6 +50,7 @@ import { HomeAssistantAutomationBoundary } from "../../dist/phase3/automationHaB
 import { HomeAssistantPhase3Client } from "../../dist/phase3/homeAssistantAdapter.js";
 import { Phase3OfflineRetention } from "../../dist/phase3/retention.js";
 import { acquirePhase3OperatorLease } from "../../dist/phase3/operatorLease.js";
+import { runPhase3McpCommand } from "../../dist/phase3/operatorRuntime.js";
 import { sha256 } from "../../dist/phase3/contracts.js";
 
 const root = "/fixture/config";
@@ -188,12 +189,18 @@ int main(int argc,char **argv) {
   );
   assert(compiled.status === 0, "fixture_pty_compile_failed");
   const connections = new Set();
+  let automationReloadRequests = 0;
   const proxy = createServer((incoming, outgoing) => {
     if (!incoming.url?.startsWith("/core/api")) {
       outgoing.writeHead(404);
       outgoing.end();
       return;
     }
+    if (
+      incoming.method === "POST" &&
+      incoming.url === "/core/api/services/automation/reload"
+    )
+      automationReloadRequests += 1;
     const upstream = httpRequest(
       {
         host: "127.0.0.1",
@@ -476,6 +483,209 @@ int main(int argc,char **argv) {
     row(
       "actual-wrapper-existing-epoch-missing-key-refuses-without-replacement",
     );
+
+    // Supplemental native MCP composition evidence. These callbacks simulate
+    // acceptance/decline in this owned fixture; they are not a real human approval
+    // or a transport round trip. SDK elicitation has separate transport tests.
+    const mcpConfig = loadConfig({
+      HA_MODE: "addon",
+      SUPERVISOR_TOKEN: request.token,
+      HA_ENABLE_PHASE2: "true",
+      HA_ENABLE_MCP_WRITES: "true",
+    });
+    assert(
+      mcpConfig.enableMcpWrites && !mcpConfig.enableWrites,
+      "fixture_mcp_policy_invalid",
+    );
+    const rotationContext = {
+      signal: new AbortController().signal,
+      requestApproval: async () => {
+        throw new Error("rotation_requested_apply_approval");
+      },
+    };
+    const beforeFirstRotation = sha256(
+      readFileSync("/homeassistant/automations.yaml"),
+    );
+    const reloadsBeforeFirstRotation = automationReloadRequests;
+    const firstMcpRotation = await runPhase3McpCommand(
+      { operation: "rotate" },
+      mcpConfig,
+      rotationContext,
+    );
+    assert(
+      firstMcpRotation.ok &&
+        firstMcpRotation.archive?.includes("archive-") &&
+        sha256(readFileSync("/homeassistant/automations.yaml")) ===
+          beforeFirstRotation &&
+        automationReloadRequests === reloadsBeforeFirstRotation,
+      "fixture_mcp_initial_rotation_changed_live_state",
+    );
+
+    const mcpProposal = await propose("Disposable native MCP fixture callback");
+    const mcpSnapshot = await new ProtectedPhase3ProposalAdapter(store).load(
+      mcpProposal.proposalId,
+    );
+    const expectedConfirmation = `APPLY ${mcpProposal.proposalId} ${mcpSnapshot.proposalStorageSha256}`;
+    const refusalSource = sha256(
+      readFileSync("/homeassistant/automations.yaml"),
+    );
+    const refusalReloads = automationReloadRequests;
+    for (const refusal of ["decline", "cancel"]) {
+      const controller = new AbortController();
+      let requests = 0;
+      let refused = false;
+      try {
+        await runPhase3McpCommand(
+          { operation: "apply-proposal", proposalId: mcpProposal.proposalId },
+          mcpConfig,
+          {
+            signal: controller.signal,
+            requestApproval: async (approval) => {
+              requests += 1;
+              assert(
+                approval.confirmation === expectedConfirmation &&
+                  approval.signal === controller.signal,
+                "fixture_mcp_approval_binding_invalid",
+              );
+              if (refusal === "cancel") controller.abort();
+              return refusal === "decline" ? "DECLINED" : approval.confirmation;
+            },
+          },
+        );
+      } catch (error) {
+        refused =
+          error.code ===
+          (refusal === "decline"
+            ? "confirmation_rejected"
+            : "operation_inactive");
+      }
+      assert(
+        refused &&
+          requests === 1 &&
+          sha256(readFileSync("/homeassistant/automations.yaml")) ===
+            refusalSource &&
+          automationReloadRequests === refusalReloads &&
+          readdirSync("/data/phase3-runtime/active/approvals").join(",") ===
+            "header.json" &&
+          readdirSync("/data/phase3-runtime/active/checkpoints").length === 0 &&
+          readdirSync("/data/phase3-runtime/active/journal").length === 0,
+        "fixture_mcp_refusal_had_effect",
+      );
+    }
+    row("native-mcp-fixture-decline-and-cancellation-before-effect");
+
+    let approvalsRequested = 0;
+    const approvedContext = {
+      signal: new AbortController().signal,
+      requestApproval: async (approval) => {
+        approvalsRequested += 1;
+        assert(
+          approval.confirmation === expectedConfirmation &&
+            approval.message.includes(mcpSnapshot.candidateSha256) &&
+            approval.message.includes(mcpSnapshot.diffSha256) &&
+            approval.message.includes("Redacted diff:") &&
+            !approval.message.includes(request.token),
+          "fixture_mcp_review_metadata_invalid",
+        );
+        return approval.confirmation;
+      },
+    };
+    const mcpApplied = await runPhase3McpCommand(
+      { operation: "apply-proposal", proposalId: mcpProposal.proposalId },
+      mcpConfig,
+      approvedContext,
+    );
+    assert(
+      mcpApplied.ok &&
+        mcpApplied.state === "verification_succeeded" &&
+        approvalsRequested === 1 &&
+        automationReloadRequests === refusalReloads + 1 &&
+        sha256(readFileSync("/homeassistant/automations.yaml")) ===
+          mcpSnapshot.candidateSha256,
+      "fixture_mcp_native_apply_failed",
+    );
+    const mcpAudit = readFileSync(
+      "/data/phase3-runtime/active/operator.jsonl",
+      "utf8",
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const mcpSettled = mcpAudit.find(
+      (record) =>
+        record.event === "settled" &&
+        record.proposalId === mcpProposal.proposalId,
+    );
+    assert(
+      mcpSettled?.transactionId === mcpApplied.transactionId &&
+        mcpSettled.state === "verification_succeeded" &&
+        mcpSettled.proposalStorageSha256 ===
+          mcpSnapshot.proposalStorageSha256 &&
+        /^[0-9a-f]{64}$/.test(mcpSettled.displayedSha256),
+      "fixture_mcp_audit_binding_missing",
+    );
+    const loaded = await new HomeAssistantAutomationBoundary(
+      mcpConfig,
+      new ProtectedPhase3SourceAdapter(catalog, registry),
+    ).probe(
+      {
+        transactionId: mcpApplied.transactionId,
+        path: "automations.yaml",
+        outcome: "candidate",
+        expectedSha256: mcpSnapshot.candidateSha256,
+        impact: "domain_reload",
+        reloadTarget: "automation.reload",
+        rollbackReloadRequired: false,
+      },
+      ctx(),
+    );
+    assert(loaded.status === "verified", "fixture_mcp_loaded_ha_proof_failed");
+    row("native-mcp-fixture-approved-real-producer-apply-and-loaded-ha-proof");
+
+    const beforeFinalRotation = sha256(
+      readFileSync("/homeassistant/automations.yaml"),
+    );
+    const reloadsBeforeFinalRotation = automationReloadRequests;
+    const finalMcpRotation = await runPhase3McpCommand(
+      { operation: "rotate" },
+      mcpConfig,
+      rotationContext,
+    );
+    assert(
+      finalMcpRotation.ok &&
+        finalMcpRotation.archive?.includes("archive-") &&
+        sha256(readFileSync("/homeassistant/automations.yaml")) ===
+          beforeFinalRotation &&
+        automationReloadRequests === reloadsBeforeFinalRotation &&
+        readdirSync("/data/phase3-runtime/active/journal").length === 0,
+      "fixture_mcp_rotation_changed_live_state",
+    );
+    const archivesAfterRotation = readdirSync("/data/phase3-runtime")
+      .filter((name) => name.startsWith("archive-"))
+      .sort()
+      .join(",");
+    let emptyRotationRefused = false;
+    try {
+      await runPhase3McpCommand(
+        { operation: "rotate" },
+        mcpConfig,
+        rotationContext,
+      );
+    } catch (error) {
+      emptyRotationRefused = error.code === "completed_transaction_required";
+    }
+    assert(
+      emptyRotationRefused &&
+        readdirSync("/data/phase3-runtime")
+          .filter((name) => name.startsWith("archive-"))
+          .sort()
+          .join(",") === archivesAfterRotation &&
+        sha256(readFileSync("/homeassistant/automations.yaml")) ===
+          beforeFinalRotation &&
+        automationReloadRequests === reloadsBeforeFinalRotation,
+      "fixture_mcp_empty_rotation_had_effect",
+    );
+    row("native-mcp-fixture-rotation-preserves-live-config-and-reload-count");
     producer.close();
   } finally {
     for (const socket of connections) socket.destroy();

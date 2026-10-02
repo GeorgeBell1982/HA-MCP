@@ -2,6 +2,22 @@ import type { z } from "zod";
 
 export interface ToolCallContext {
   readonly signal: AbortSignal;
+  /** Originating transport only. Never populated from tool arguments. */
+  readonly requestApproval?: (request: ToolApprovalRequest) => Promise<string>;
+}
+
+export interface ToolApprovalRequest {
+  readonly message: string;
+  readonly confirmation: string;
+  readonly signal: AbortSignal;
+  readonly deadlineAt: number;
+}
+
+export class ToolApprovalError extends Error {
+  constructor(public readonly code: string) {
+    super(`MCP approval failed: ${code}`);
+    this.name = "ToolApprovalError";
+  }
 }
 
 export interface ToolResult {
@@ -14,6 +30,12 @@ export interface ToolDescriptor {
   readonly description: string;
   readonly inputSchema: z.ZodTypeAny;
   readonly outputSchema?: z.ZodTypeAny | undefined;
+  readonly annotations?: Readonly<{
+    readOnlyHint?: boolean;
+    idempotentHint?: boolean;
+    destructiveHint?: boolean;
+    openWorldHint?: boolean;
+  }>;
 }
 
 export interface ToolRegistry {

@@ -55,10 +55,15 @@ export class RemoteSession<Client> {
     return new RemoteSession(connection, factory);
   }
 
-  run<Result>(operation: (client: Client) => Promise<Result>): Promise<Result> {
+  run<Result>(
+    operation: (client: Client) => Promise<Result>,
+    options: { readonly retryExpiredSession?: boolean } = {},
+  ): Promise<Result> {
     if (this.state !== "open")
       return Promise.reject(new Error("Remote session is closing"));
-    const result = this.tail.then(() => this.execute(operation));
+    const result = this.tail.then(() =>
+      this.execute(operation, options.retryExpiredSession !== false),
+    );
     this.tail = result.then(
       () => undefined,
       () => undefined,
@@ -80,12 +85,14 @@ export class RemoteSession<Client> {
 
   private async execute<Result>(
     operation: (client: Client) => Promise<Result>,
+    retryExpiredSession: boolean,
   ): Promise<Result> {
     const attempted = this.current;
     try {
       return await operation(attempted.client);
     } catch (error) {
-      if (!isExpiredSession(error, attempted.transport)) throw error;
+      if (!retryExpiredSession || !isExpiredSession(error, attempted.transport))
+        throw error;
     }
 
     const candidate = this.factory();

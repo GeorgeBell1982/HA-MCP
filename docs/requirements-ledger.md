@@ -773,6 +773,61 @@ Git kernel compatibility remain separate. The phone backup predates operator key
 initialization; it does not contain the newly created key/epoch state. Keep later
 operator key and complete epoch evidence together when backing up/restoring.
 
+## Chat-approved MCP extension authorized on 2026-10-02
+
+The owner explicitly requested changes through MCP with approval in this chat.
+The accepted independent plan review kept only guarded pending automation apply,
+state-only terminal epoch rotation and a harmless approval display check. The
+review identified mutation replay on expired HTTP sessions and required a
+non-retry path, originating request/session binding, exact accepted form content,
+cancellation/deadline enforcement, fresh proposal reread and preserved uncertainty.
+
+Implementation reuses the existing operator composition, OS lease and coordinator
+without pretending an MCP request is a terminal. `enable_mcp_writes` defaults off
+and requires managed add-on mode plus active Phase 2. No approval boolean, grant,
+approver identity or arbitrary path can enter tool arguments. Every paired client
+is trusted to present human prompts honestly; MCP elicitation does not prove a
+human identity. Initialization, manual recovery and interrupted rotation resume
+remain local. General capability authorization does not approve a live proposal.
+Fixture confirmations are simulated and must not be reported as actual chat UI
+acceptance. Current-host support must be verified separately using the no-effect
+check. Verification/publication/deployment outcomes are recorded below.
+
+### Guarded MCP source and disposable acceptance
+
+Authoritative `CI=true pnpm verify` passed all stages: exact add-on context,
+formatting, lint, typecheck, build and **1,373 tests across 51 files**, with 16
+platform skips. Earlier verification attempts found formatting and lint issues;
+these were corrected before the successful run. Focused transport evidence includes
+actual pinned TLS HTTP → built stdio bridge → form-capable SDK host, originating
+request correlation, cancellation before effect, unsupported-client refusal, and
+a settled HTTPS mutation whose response was replaced by HTTP 404: exactly one
+dispatch/effect. These SDK fixture confirmations do not establish this Codex UI.
+
+The expanded disposable native/real Core `2026.9.4` workflow passed **27/27 rows**
+on both Linux amd64 and the actual Pi arm64 host. Three new rows cover MCP decline
+and cancellation before grant/checkpoint/journal/config/reload effects, simulated
+fixture acceptance through the real producer/native replacement/HA loaded-state
+proof, and rotation without config/reload effects. A second rotation on the fresh
+empty epoch is refused without creating another archive. All previous terminal,
+recovery, rollback, lease and cleanup rows remain required and passed.
+
+The Pi's temporary fixture builder was
+`sha256:0a6b06a7a9c9a8dda927148827abc2f6dea80b87ff893485d3b2483653e43e60`,
+derived from the installed `0.2.2` image with the current built source and pinned
+compiler inputs. The runner received only disposable fixture authority; owned
+containers and volumes were removed with affirmative inventory proof. Its temporary
+builder image/tag and local context were also removed. No live configuration
+proposal, recovery or reload was performed. Current-host human UI acceptance and
+production application remain separate from fixture proof.
+
+Independent read-only change review approved the complete path with no remaining
+actionable blocker. It resolved findings on source mirrors, stale contract claims,
+preflight audit, empty rotation and cleanup uncertainty. The reviewer independently
+passed the context/diff checks, 105 focused tests and a fresh build/28-test transport
+suite. The current chat's no-effect approval check remains a separate acceptance
+step; no unspecified live proposal is authorized.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

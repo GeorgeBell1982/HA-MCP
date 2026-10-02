@@ -222,12 +222,12 @@ describe("Phase 3A contracts", () => {
         .expected_or_checkpoint,
     ).toBe("rolled_back_no_effect");
     expect(phase3Contract).toMatchObject({
-      registered: false,
+      registered: "managed-addon-opt-in",
       writesEnabled: false,
-      grantProducer: "local-tty-only",
+      grantProducer: "local-tty-or-originating-mcp-form",
       cli: "explicit-local-operator",
-      mcpTools: "absent",
-      liveAdapters: "local-operator-only",
+      mcpTools: ["ha_apply_proposal", "ha_rotate_epoch", "ha_check_approval"],
+      liveAdapters: "local-operator-and-guarded-mcp",
     });
   });
 });

@@ -4,6 +4,7 @@ import { access, lstat, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Config } from "../config.js";
+import type { ToolCallContext } from "../toolRegistry.js";
 import {
   ProductionSecretValueProvider,
   PHASE2_FIXED_ADDON_PATHS,
@@ -36,6 +37,7 @@ import { HomeAssistantAutomationBoundary } from "./automationHaBoundary.js";
 import { HomeAssistantPhase3Client } from "./homeAssistantAdapter.js";
 import {
   approveAndApplyProposal,
+  approveAndApplyMcpProposal,
   Phase3OperatorError,
   type Phase3OperatorTerminal,
 } from "./operatorApproval.js";
@@ -83,7 +85,7 @@ export function parsePhase3OperatorCommand(
   throw new Phase3OperatorError("invalid_command_or_writes_disabled");
 }
 
-/** Explicit local operator composition only. MCP server and add-on writes remain disabled. */
+/** Explicit local operator composition. */
 export async function runPhase3OperatorCommand(
   args: readonly string[],
   config: Config,
@@ -92,6 +94,46 @@ export async function runPhase3OperatorCommand(
   const command = parsePhase3OperatorCommand(args);
   if (!terminal.inputIsTTY || !terminal.outputIsTTY)
     throw new Phase3OperatorError("interactive_terminal_required");
+  return runPhase3Command(command, config, { terminal });
+}
+
+/** Only the opt-in registry can reach this composition with transport approval. */
+export async function runPhase3McpCommand(
+  command:
+    | { readonly operation: "apply-proposal"; readonly proposalId: string }
+    | { readonly operation: "rotate" },
+  config: Config,
+  context: ToolCallContext,
+) {
+  if (
+    !config.enableMcpWrites ||
+    !config.enablePhase2 ||
+    config.mode !== "addon"
+  )
+    throw new Phase3OperatorError("mcp_writes_disabled");
+  if (!context.requestApproval)
+    throw new Phase3OperatorError("chat_approval_unavailable");
+  if (context.signal.aborted)
+    throw new Phase3OperatorError("operation_inactive");
+  if (command.operation !== "apply-proposal" && command.operation !== "rotate")
+    throw new Phase3OperatorError("invalid_command");
+  if (
+    command.operation === "apply-proposal" &&
+    (!z.string().uuid().safeParse(command.proposalId).success ||
+      command.proposalId !== command.proposalId.toLowerCase())
+  )
+    throw new Phase3OperatorError("invalid_command");
+  return runPhase3Command(command, config, { mcp: context });
+}
+
+async function runPhase3Command(
+  command: Phase3OperatorCommand,
+  config: Config,
+  interaction:
+    | { readonly terminal: Phase3OperatorTerminal }
+    | { readonly mcp: ToolCallContext },
+) {
+  const terminal = "terminal" in interaction ? interaction.terminal : undefined;
   if (process.platform !== "linux" || config.mode !== "addon")
     throw new Phase3OperatorError("managed_linux_operator_required");
   await requireDirectory("/data", false);
@@ -102,152 +144,165 @@ export async function runPhase3OperatorCommand(
   let key: Awaited<ReturnType<typeof loadPhase3ApprovalKey>> | undefined;
   let epoch: Phase3EpochStores | undefined;
   let cursors: RepositoryCursorCodec | undefined;
-  try {
-    // Initialization is explicit. Apply/recovery never invent or replace approval keys.
-    if (command.operation === "init") {
-      await assertPhase3BootstrapParentIsFresh(PHASE3_OPERATOR_PARENT, lease);
-      await createDirectory(PHASE3_APPROVAL_KEY_STATE_DIRECTORY);
-      try {
-        key = await loadPhase3ApprovalKey();
-      } catch (error) {
-        if (
-          !(error instanceof Error) ||
-          !("code" in error) ||
-          error.code !== "approval_key_missing"
-        )
-          throw error;
-        await provisionPhase3ApprovalKey();
-      }
-    }
-    key ??= await loadPhase3ApprovalKey();
-    const retention = new Phase3OfflineRetention(
-      PHASE3_OPERATOR_PARENT,
-      key.key,
-    );
-    if (command.operation === "init") {
-      epoch = await retention.initialize(lease);
-      return { ok: true, operation: "init", writesEnabled: false };
-    }
-    for (const helper of [
-      PHASE2_FIXED_ARTIFACT_PATHS.readHelperPath,
-      PHASE2_FIXED_ARTIFACT_PATHS.catalogHelperPath,
-    ])
-      await requireHelper(helper);
-    if (
-      command.operation === "apply-proposal" ||
-      command.operation === "recover"
-    ) {
-      await requireHelper(atomicHelper);
-      try {
-        await access(PHASE2_FIXED_ADDON_PATHS.repositoryRoot, constants.W_OK);
-      } catch {
-        throw new Phase3OperatorError("operator_repository_read_only");
-      }
-    }
-    await requireDirectory(PHASE2_FIXED_ADDON_PATHS.proposalRoot);
-    const store = new ProtectedProposalStore(
-      PHASE2_FIXED_ADDON_PATHS.proposalRoot,
-    );
-    await store.initialize();
-    const reader = new NativeOpenat2Reader({
-      root: PHASE2_FIXED_ADDON_PATHS.repositoryRoot,
-      helperPath: PHASE2_FIXED_ARTIFACT_PATHS.readHelperPath,
-      maximumConcurrentHelpers: 1,
-    });
-    const catalog = new NativeOpenat2Catalog({
-      root: PHASE2_FIXED_ADDON_PATHS.repositoryRoot,
-      helperPath: PHASE2_FIXED_ARTIFACT_PATHS.catalogHelperPath,
-      maximumConcurrentHelpers: 1,
-    });
-    const registry = new ProtectedIdentityRegistry(reader);
-    const context = {
-      signal: new AbortController().signal,
-      deadlineAt: Date.now() + 300_000,
-    };
-    await registry.initialize(
-      ["secrets.yaml"],
-      new ProductionSecretValueProvider(),
-      { ...context, operationId: randomUUID(), requestId: randomUUID() },
-    );
-    const cursorKey = randomBytes(32);
+  let operationFailed = false;
+  let settled: { transactionId: string; state: string } | undefined;
+  let cleaned = true;
+  const execute = async () => {
     try {
-      cursors = new RepositoryCursorCodec(cursorKey);
-    } finally {
-      cursorKey.fill(0);
-    }
-    const resources = new RepositoryResourceService(
-      catalog,
-      reader,
-      registry,
-      cursors,
-    );
-    const source = new ProtectedPhase3SourceAdapter(catalog, registry);
-    const proposals = new ProtectedPhase3ProposalAdapter(store);
-    const boundary = new HomeAssistantAutomationBoundary(config, source);
-    const locks = new Phase3ResourceLocks();
-    const coordinator = (stores: Phase3EpochStores) =>
-      new Phase3ApplyCoordinator({
-        proposals,
-        policy: new AutomationPhase3AdmissionPolicy(
-          new GuardedPhase3PolicyPort({
-            writesEnabled: true,
-            applyCapability: true,
-            domainReloadCapability: true,
-          }),
-          resources,
-        ),
-        approvals: stores.approvals,
-        locks,
-        source,
-        validation: boundary,
-        checkpoints: stores.checkpoints,
-        atomicApply: new NativePhase3AtomicApply({
-          root: PHASE2_FIXED_ADDON_PATHS.repositoryRoot,
-          helperPath: atomicHelper,
-          maxConcurrent: 1,
-          maxWaiters: 1,
-        }),
-        reload: new NarrowPhase3ReloadAdapter(
-          new AutomationPhase3ReloadCatalog(resources),
-          new HomeAssistantPhase3Client(config),
-        ),
-        verification: new NarrowPhase3VerificationAdapter(source, boundary),
-        journal: stores.journal,
+      // Initialization is explicit. Apply/recovery never invent or replace approval keys.
+      if (command.operation === "init") {
+        await assertPhase3BootstrapParentIsFresh(PHASE3_OPERATOR_PARENT, lease);
+        await createDirectory(PHASE3_APPROVAL_KEY_STATE_DIRECTORY);
+        try {
+          key = await loadPhase3ApprovalKey();
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            !("code" in error) ||
+            error.code !== "approval_key_missing"
+          )
+            throw error;
+          await provisionPhase3ApprovalKey();
+        }
+      }
+      key ??= await loadPhase3ApprovalKey();
+      const retention = new Phase3OfflineRetention(
+        PHASE3_OPERATOR_PARENT,
+        key.key,
+      );
+      if (command.operation === "init") {
+        epoch = await retention.initialize(lease);
+        return { ok: true, operation: "init", writesEnabled: false };
+      }
+      for (const helper of [
+        PHASE2_FIXED_ARTIFACT_PATHS.readHelperPath,
+        PHASE2_FIXED_ARTIFACT_PATHS.catalogHelperPath,
+      ])
+        await requireHelper(helper);
+      if (
+        command.operation === "apply-proposal" ||
+        command.operation === "recover"
+      ) {
+        await requireHelper(atomicHelper);
+        try {
+          await access(PHASE2_FIXED_ADDON_PATHS.repositoryRoot, constants.W_OK);
+        } catch {
+          throw new Phase3OperatorError("operator_repository_read_only");
+        }
+      }
+      await requireDirectory(PHASE2_FIXED_ADDON_PATHS.proposalRoot);
+      const store = new ProtectedProposalStore(
+        PHASE2_FIXED_ADDON_PATHS.proposalRoot,
+      );
+      await store.initialize();
+      const reader = new NativeOpenat2Reader({
+        root: PHASE2_FIXED_ADDON_PATHS.repositoryRoot,
+        helperPath: PHASE2_FIXED_ARTIFACT_PATHS.readHelperPath,
+        maximumConcurrentHelpers: 1,
       });
-    if (command.operation === "rotate" || command.operation === "resume") {
-      const archive = await retention[command.operation](lease, (stores) =>
-        coordinator(stores).recover(),
-      );
-      return { ok: true, operation: command.operation, archive };
-    }
-    epoch = await retention.open(lease);
-    if (command.operation === "recover") {
-      const result = await approveAndRecoverPhase3(
-        {
-          terminal,
-          journal: epoch.journal,
-          coordinator: coordinator(epoch),
-          audit: new Phase3OperatorAudit(
-            join(epoch.root, "operator.jsonl"),
-            lease,
-          ),
-        },
-        context,
-      );
-      return {
-        ok: !result.some((item) => item.manualAttentionRequired),
-        operation: "recover",
-        result,
+      const catalog = new NativeOpenat2Catalog({
+        root: PHASE2_FIXED_ADDON_PATHS.repositoryRoot,
+        helperPath: PHASE2_FIXED_ARTIFACT_PATHS.catalogHelperPath,
+        maximumConcurrentHelpers: 1,
+      });
+      const registry = new ProtectedIdentityRegistry(reader);
+      const context = {
+        signal:
+          "mcp" in interaction
+            ? interaction.mcp.signal
+            : new AbortController().signal,
+        deadlineAt: Date.now() + 300_000,
       };
-    }
-    if ((await epoch.journal.listRecoverable()).length !== 0)
-      throw new Phase3OperatorError("epoch_rotation_required");
-    if (command.operation !== "apply-proposal")
-      throw new Phase3OperatorError("invalid_command");
-    const record = await approveAndApplyProposal(
-      command.proposalId,
-      {
-        terminal,
+      await registry.initialize(
+        ["secrets.yaml"],
+        new ProductionSecretValueProvider(),
+        { ...context, operationId: randomUUID(), requestId: randomUUID() },
+      );
+      const cursorKey = randomBytes(32);
+      try {
+        cursors = new RepositoryCursorCodec(cursorKey);
+      } finally {
+        cursorKey.fill(0);
+      }
+      const resources = new RepositoryResourceService(
+        catalog,
+        reader,
+        registry,
+        cursors,
+      );
+      const source = new ProtectedPhase3SourceAdapter(catalog, registry);
+      const proposals = new ProtectedPhase3ProposalAdapter(store);
+      const boundary = new HomeAssistantAutomationBoundary(config, source);
+      const locks = new Phase3ResourceLocks();
+      const coordinator = (stores: Phase3EpochStores) =>
+        new Phase3ApplyCoordinator({
+          proposals,
+          policy: new AutomationPhase3AdmissionPolicy(
+            new GuardedPhase3PolicyPort({
+              writesEnabled: true,
+              applyCapability: true,
+              domainReloadCapability: true,
+            }),
+            resources,
+          ),
+          approvals: stores.approvals,
+          locks,
+          source,
+          validation: boundary,
+          checkpoints: stores.checkpoints,
+          atomicApply: new NativePhase3AtomicApply({
+            root: PHASE2_FIXED_ADDON_PATHS.repositoryRoot,
+            helperPath: atomicHelper,
+            maxConcurrent: 1,
+            maxWaiters: 1,
+          }),
+          reload: new NarrowPhase3ReloadAdapter(
+            new AutomationPhase3ReloadCatalog(resources),
+            new HomeAssistantPhase3Client(config),
+          ),
+          verification: new NarrowPhase3VerificationAdapter(source, boundary),
+          journal: stores.journal,
+        });
+      if (command.operation === "rotate" || command.operation === "resume") {
+        if ("mcp" in interaction) {
+          const current = await retention.open(lease);
+          try {
+            if ((await current.journal.listRecoverable()).length !== 1)
+              throw new Phase3OperatorError("completed_transaction_required");
+          } finally {
+            await current.approvals.close();
+          }
+        }
+        const archive = await retention[command.operation](lease, (stores) =>
+          coordinator(stores).recover(),
+        );
+        return { ok: true, operation: command.operation, archive };
+      }
+      epoch = await retention.open(lease);
+      if (command.operation === "recover") {
+        const result = await approveAndRecoverPhase3(
+          {
+            terminal: terminal!,
+            journal: epoch.journal,
+            coordinator: coordinator(epoch),
+            audit: new Phase3OperatorAudit(
+              join(epoch.root, "operator.jsonl"),
+              lease,
+            ),
+          },
+          context,
+        );
+        return {
+          ok: !result.some((item) => item.manualAttentionRequired),
+          operation: "recover",
+          result,
+        };
+      }
+      if ((await epoch.journal.listRecoverable()).length !== 0)
+        throw new Phase3OperatorError("epoch_rotation_required");
+      if (command.operation !== "apply-proposal")
+        throw new Phase3OperatorError("invalid_command");
+      const ports = {
         store,
         registry,
         proposals,
@@ -257,21 +312,73 @@ export async function runPhase3OperatorCommand(
           join(epoch.root, "operator.jsonl"),
           lease,
         ),
-      },
-      context,
-    );
-    return {
-      ok: record.state === "verification_succeeded",
-      operation: "apply-proposal",
-      transactionId: record.transactionId,
-      state: record.state,
-    };
-  } finally {
-    await epoch?.approvals.close();
-    cursors?.close();
-    key?.release();
-    await lease.release();
+      };
+      const record =
+        "mcp" in interaction
+          ? await approveAndApplyMcpProposal(
+              command.proposalId,
+              ports,
+              context,
+              interaction.mcp.requestApproval!,
+            )
+          : await approveAndApplyProposal(
+              command.proposalId,
+              { ...ports, terminal: terminal! },
+              context,
+            );
+      settled = { transactionId: record.transactionId, state: record.state };
+      return {
+        ok: record.state === "verification_succeeded",
+        operation: "apply-proposal",
+        transactionId: record.transactionId,
+        state: record.state,
+      };
+    } catch (error) {
+      operationFailed = true;
+      throw error;
+    } finally {
+      cleaned = await completePhase3Cleanup([
+        () => epoch?.approvals.close(),
+        () => cursors?.close(),
+        () => key?.release(),
+        () => lease.release(),
+      ]);
+    }
+  };
+  const result = await execute();
+  if (!cleaned && !operationFailed) {
+    if (settled)
+      throw new Phase3OperatorCleanupUncertain(
+        settled.transactionId,
+        settled.state,
+      );
+    throw new Phase3OperatorError("operator_cleanup_uncertain");
   }
+  return result;
+}
+
+export class Phase3OperatorCleanupUncertain extends Phase3OperatorError {
+  constructor(
+    public readonly transactionId: string,
+    public readonly state: string,
+  ) {
+    super("post_settlement_cleanup_uncertain");
+  }
+}
+
+/** Every cleanup is attempted in order, including release of the shared OS lease. */
+export async function completePhase3Cleanup(
+  cleanups: readonly (() => void | Promise<void>)[],
+): Promise<boolean> {
+  let completed = true;
+  for (const cleanup of cleanups) {
+    try {
+      await cleanup();
+    } catch {
+      completed = false;
+    }
+  }
+  return completed;
 }
 
 export async function assertPhase3BootstrapParentIsFresh(

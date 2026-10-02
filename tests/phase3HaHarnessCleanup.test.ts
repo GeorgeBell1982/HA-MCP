@@ -43,7 +43,7 @@ it("requires every exact acceptance row and rejects missing, duplicate, extra or
 import assert from "node:assert/strict";
 import { mainWorkerRows, readonlyWorkerRows, boundaryRows, assertExactRows, parseWorkerRows } from ${JSON.stringify(moduleUrl)};
 const all = [...boundaryRows, ...mainWorkerRows, ...readonlyWorkerRows];
-assert.equal(all.length, 24);
+assert.equal(all.length, 27);
 assertExactRows(all, all);
 for (const expected of [mainWorkerRows, readonlyWorkerRows]) {
   const output = expected.map(row => "PASSED " + row).join("\\n");

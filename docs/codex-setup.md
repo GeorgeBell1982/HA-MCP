@@ -21,9 +21,30 @@ lost, or exposed.
 If the add-on expires an otherwise authenticated HTTP session, the bridge creates a
 new pinned and authenticated session and retries the queued read-only request once.
 Authentication, rate-limit, TLS, network, and endpoint failures are not retried.
+Apply and epoch rotation are never replayed after session expiry or a lost response.
+An uncertain result requires transaction inspection, not an automatic retry.
 Ending the bridge's stdin or stopping it with SIGINT/SIGTERM closes its authenticated
 HTTP session before exit. Shutdown is bounded so a stalled operation or remote close
 cannot leave the bridge process or server-side session indefinitely.
 
 Direct HTTP configuration is optional; local development can continue to use
 `dist/index.js` over stdio with a dedicated Home Assistant user/token.
+
+## Human approval for guarded application
+
+Add-on `0.2.3` can opt in with `enable_mcp_writes: true` alongside `enable_phase2`.
+Rebuild the local bridge and reconnect the MCP client to refresh its inventory.
+Run `ha_check_approval`; it requests a harmless exact confirmation and changes no
+Home Assistant state. This host must advertise MCP form elicitation and display
+the prompt. Unsupported clients cannot apply proposals.
+
+`ha_apply_proposal` accepts only a proposal ID. It shows the exact redacted diff
+and proposal identity through the client's approval UI, then requires an exact
+typed confirmation. Approval booleans, approver names and grant IDs in tool input
+are rejected. The server rereads the proposal after approval and uses an internal
+short-lived single-use grant. The paired client is trusted to present this prompt
+honestly; the protocol does not authenticate a human identity.
+
+After a completed transaction, `ha_rotate_epoch` archives the protected state to
+prepare the next apply. It refuses uncertain, incomplete or drifted transactions.
+Manual recovery and interrupted rotation resumption remain terminal operations.

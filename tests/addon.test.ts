@@ -37,15 +37,17 @@ const nativeOutputs = [
 ] as const;
 
 describe("installable add-on packaging", () => {
-  it("is aarch64-only, released at 0.2.2, and permits the guarded local operator without broad host privileges", async () => {
+  it("is aarch64-only, released at 0.2.3, and permits guarded application without broad host privileges", async () => {
     const manifest = await readFile("addon/config.yaml", "utf8");
-    expect(manifest).toMatch(/^version: "0\.2\.2"$/m);
+    expect(manifest).toMatch(/^version: "0\.2\.3"$/m);
     expect(manifest).toContain("- aarch64");
     expect(manifest).toContain("homeassistant_api: true");
     expect(manifest).toMatch(
       /^map:\n {2}- type: homeassistant_config\n {4}read_only: false$/m,
     );
     expect(manifest).toContain("enable_phase2: true");
+    expect(manifest).toContain("enable_mcp_writes: false");
+    expect(manifest).toContain("enable_mcp_writes: bool");
     expect(manifest).toContain("enable_http: false");
     expect(manifest).toContain("ingress_port: 8099");
     expect(manifest).not.toContain("8099/tcp");

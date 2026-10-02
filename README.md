@@ -1,20 +1,22 @@
 # Home Assistant Engineering MCP
 
 Engineering MCP for Home Assistant with read-only diagnostics and protected
-configuration proposals. It supports local stdio and an
+configuration proposals and optional human-approved automation application. It supports local stdio and an
 installable HA OS aarch64 add-on with paired, TLS-only Streamable HTTP plus a pinned
 local stdio bridge. The managed add-on can enable Phase 2 configuration and Git
 inspection plus proposal storage after startup security gates pass. Home Assistant
-configuration is mounted writable at `/homeassistant` in add-on `0.2.2` for the
-guarded local terminal operator; MCP proposals write only to
-protected `/data`. Apply, restart, deletion, arbitrary service calls, shell, and Git
-writes are absent from the MCP runtime. Phase 3 components and their disposable
-workflow are composed only by the explicit local operator, with per-command write
-enablement and typed terminal approval.
+configuration is mounted writable at `/homeassistant`. Add-on `0.2.3` adds
+`enable_mcp_writes` (false by default): it exposes guarded application of pending
+`automations.yaml` proposals with the exact redacted diff and a human confirmation
+through MCP form elicitation. The client must support approval; unsupported,
+declined, cancelled or stale responses fail closed. The existing validation,
+checkpoint, narrow automation reload, rollback and verification remain in force.
+Restart, arbitrary services, shell and Git writes are unavailable. Initialization
+and manual recovery use the local terminal operator.
 
 Start with the [current project context](docs/recovery.md#project-context-as-of-2026-10-02)
 for implemented capabilities, historical live acceptance, remaining gates, and
-resumption guidance. The source add-on version is `0.2.2`; deployment and acceptance
+resumption guidance. The source add-on version is `0.2.3`; deployment and acceptance
 evidence are recorded separately from source publication.
 
 See [deployment](docs/deployment.md), [Codex setup](docs/codex-setup.md),
