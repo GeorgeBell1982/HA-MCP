@@ -109,8 +109,9 @@ Complete the following delivery gates in order:
    56-row approval, 45-row persistence and eight-row disposable workflow matrices
    now pass on the Pi, along with all 24 real HA/native/operator fixture rows.
    Full native Git/security/provenance, actual production Supervisor/human operator
-   acceptance, tested production backup, and explicit
-   deployment/write approval remain open.
+   apply/recovery acceptance remain open. The user downloaded a backup, waived
+   restore testing and authorized local operator enablement; `0.2.2` is installed
+   with a writable mount and initialized protected state. MCP remains read-only.
 
 Current-Core follow-up: the same 24-row disposable native/HA/operator workflow
 passed against pinned Core `2026.9.4`, matching the installed Pi version. Source
@@ -119,8 +120,9 @@ confirmed. Native Pi packaging/ABI availability, root-owned helpers, actual
 read-only mount and operator import are now verified over SSH; `.git` is absent,
 explaining the Git refusal. Native approval/persistence/disposable workflow checks
 passed and their owned test container was removed. Full native Git/security/image
-provenance and actual production Supervisor/human operator lifecycle evidence, backup and
-production write enablement remain gated. The subsequent native Git matrix is
+provenance and actual production apply/recovery evidence remain open. Local operator
+enablement is now user-authorized and deployed; restore testing was waived after
+phone backup download. The subsequent native Git matrix is
 blocked specifically by the Pi kernel's disabled Landlock support (`ENOSYS`);
 the broker's fail-closed protection remains intact. Adding Git metadata would not
 resolve that kernel incompatibility.
@@ -136,7 +138,8 @@ Exit: the scoped real-producer/disposable-HA workflow, crash/recovery and retent
 regressions, authoritative verification, focused independent review, and explicit
 deployment/write enablement approval. Native aarch64 execution remains a separate
 target gate. Environment isolation is required only when the evidence depends on
-packaging, bootstrap, or suspected contamination. Production writes remain disabled.
+packaging, bootstrap, or suspected contamination. MCP writes remain disabled;
+production local operator effects require explicit per-command typed approval.
 
 ## Phase 4: structured operations and broader deployments
 

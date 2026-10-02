@@ -8,7 +8,10 @@ The [implementation plan](implementation-plan.md#phase-3-guarded-application) de
 the narrowed first delivery. The core transaction guarantees below remain required;
 later custody/key contracts describe isolated research, not prerequisites for that
 delivery. The explicit local operator CLI now composes the narrowed workflow;
-MCP/default writes remain disabled and production deployment is not authorized.
+MCP/default writes remain disabled. Local operator deployment was explicitly
+authorized and completed in `0.2.2`; each production apply/recovery still requires
+its own exact typed terminal approval. See the
+[installed enablement record](requirements-ledger.md#installed-022-operator-enablement-on-2026-10-02).
 
 ## Real automation proposal path
 

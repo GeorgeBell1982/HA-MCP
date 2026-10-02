@@ -6,7 +6,10 @@
 - Phase 2 activation failure: the runtime falls back to Phase 1 tools with sanitized activation diagnostics. Investigate the failed artifact, protected state, secrets, or catalog gate before expecting repository/proposal tools.
 - Apply, reload, rollback, and crash recovery are not exposed by the MCP runtime. The isolated Phase 3 components and POC do not provide production recovery authority.
 
-Before any later write phase, create and test a Home Assistant backup and retain the global mutation kill switch.
+Before operator effects, keep a Home Assistant backup outside the Pi and test
+restoration or explicitly record the deployment owner's waiver. The current owner
+has downloaded a backup on their phone and waived restore testing. MCP writes
+remain disabled; each local effect requires its write flag and typed approval.
 
 ## Project context as of 2026-10-02
 
@@ -16,9 +19,11 @@ HA validation/reload/loaded-state proof, shared queue, typed local operator appr
 and recovery, grant/journal linkage, and one-transaction epoch archive/resume are
 implemented. Disposable Linux amd64/native/HA and automated real-terminal evidence
 are recorded in the ledger. The explicit operator wrapper/helper are packaged;
-source release `0.2.1` retains the read-only mapping, so production apply/recovery
-remain unavailable. Installation of `0.2.1` on the Pi is now reported by the user
-and confirmed by the live update entity. Read-only system/config/proposal checks
+release `0.2.1` was verified with a read-only mapping. Following explicit user
+authorization, `0.2.2` is now installed with a writable mapping and initialized
+protected operator state. Local apply/recovery is available only with per-command
+write enablement and exact typed terminal approval; none has been performed.
+MCP remains read-only. Earlier read-only system/config/proposal checks
 passed against Core `2026.9.4`; Git status refused `repository_unavailable` because
 the actual `/homeassistant/.git` directory is absent (`ENOENT` verified over SSH).
 The 24-row disposable workflow now also passes against Core `2026.9.4`.
@@ -27,8 +32,9 @@ helpers, root `555` artifacts, resolved linkage, operator import and read-only
 kernel mount/Node `EROFS` refusal. Native Pi approval (56), persistence (45) and
 disposable workflow (eight) checks also passed; the isolated test container was
 removed with inventory proof. Full native Git/security/image-runner provenance,
-actual production Supervisor/human operator acceptance, backup and write enablement
-approval remain open. The full 24-row real HA/native/operator fixture now also
+actual production apply/recovery acceptance remain open. Phone backup download is
+confirmed, restoration is untested by user choice, and operator enablement is
+approved and complete. The full 24-row real HA/native/operator fixture now also
 passes on the Pi, with automated terminal confirmation and proved cleanup; see
 [native real HA workflow](requirements-ledger.md#native-pi-real-ha-workflow-on-2026-10-02).
 Custody/key extensions are
@@ -43,21 +49,22 @@ See the [kernel compatibility evidence](requirements-ledger.md#native-pi-git-con
 Start with the
 [accepted review](requirements-ledger.md#phase-3-proportionality-review-and-scope-adjustment)
 and [revised Phase 3 plan](implementation-plan.md#phase-3-guarded-application) before
-resuming Phase 3 work. Production writes remain disabled.
+resuming Phase 3 work. MCP writes remain disabled; the local operator is available.
 
 For the local operator contract, fixed paths, retention limits, uncertainty, and
 manual bootstrap recovery, use
 [operator and epoch lifecycle](phase3-contracts.md#local-operator-and-epoch-lifecycle).
 Do not selectively delete/copy approval receipts, checkpoints, journal records, or
 archives to bypass a refusal. A nonterminal/manual/drifted epoch cannot rotate.
-Production deployment/write enablement remains a separate decision after native
-target evidence and a tested HA backup; source commits and disposable fixtures do
-not authorize it.
+See [installed operator enablement](requirements-ledger.md#installed-022-operator-enablement-on-2026-10-02)
+for the explicit authorization, deployed image, protected state and health evidence.
+The downloaded phone backup predates operator initialization; include key and
+complete epoch state together in later backups. Do not restore a partial subset.
 
 This is the resumption entry point for the Home Assistant Engineering MCP. The
 repository contains a working read-only server, conditional protected repository
 and proposal tools, and extensive isolated mutation foundations. Production
-configuration application is not enabled. This snapshot reconciles source and Git
+configuration application requires the explicit local operator's approval. This snapshot reconciles source and Git
 history with the existing contracts; it does not establish current live HA health.
 
 Latest scoped delivery evidence: authoritative verification passed 1,340 tests

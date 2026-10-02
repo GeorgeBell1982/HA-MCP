@@ -742,6 +742,37 @@ Prepublication authoritative verification passed 49 files, 1341 tests with 16
 platform skips. Independent read-only review found no blockers. Read-only Pi
 metadata checks confirmed both operator state directories absent before deployment.
 
+## Installed 0.2.2 operator enablement on 2026-10-02
+
+Following the explicit user authorization and restore-test waiver recorded above,
+release commit `3ca5333` was pushed. Supervisor store refresh timed out at the
+client but completed server-side: the subsequent app info reported latest `0.2.2`.
+`ha apps update da397bfb_home_assistant_engineering_mcp --backup` then completed
+successfully. Supervisor reports installed/latest `0.2.2`, state `started`, no
+pending update. Installed image ID is
+`sha256:ff032eb3d9c0f96783e83d415270396b09e0cc2eaabe2f2788861b3d6cb8c38a`.
+
+Docker inspection reports `/homeassistant` `RW=true`; the deployed Node filesystem
+access check confirms writable. A non-TTY `recover --enable-writes` invocation
+refused with `interactive_terminal_required` and exit one before any effect.
+The explicit `init` command then ran once through SSH/Docker interactive terminals
+and returned `ok=true`, `operation=init`, `writesEnabled=false`, exit zero.
+Initialization creates protected state only; it does not apply/reload, and its
+false write policy is expected because enablement remains per effect command.
+Metadata-only checks verify root-owned mode `0700` key/runtime/active directories
+and a regular mode `0600`, single-link, 32-byte approval key. Key content was not
+read or printed. The installed MCP configuration still reports writes/restart/
+deletes false. Each local apply/recovery still requires its exact typed approval.
+
+Ingress and Supervisor Core config checks both returned HTTP 200, Core `2026.9.4`
+`RUNNING`. Registered MCP system info also passed, request ID
+`23ba6ae2-b4f2-4f1f-a3ee-b123d7504e78`. No proposal was applied, no HA reload was
+dispatched, and no production recovery was performed. Local operator capability
+is installed and initialized; actual production apply/recovery acceptance and
+Git kernel compatibility remain separate. The phone backup predates operator key
+initialization; it does not contain the newly created key/epoch state. Keep later
+operator key and complete epoch evidence together when backing up/restoring.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

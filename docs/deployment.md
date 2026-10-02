@@ -47,7 +47,26 @@ and pin; the running listener retains its old in-memory identity until restart.
 
 Repository builds and tests do not install or contact Home Assistant. Live acceptance is recorded separately below and never authorizes mutation or deployment.
 
-## Read-only Pi packaging checks for 0.2.1
+## Guarded local operator in 0.2.2
+
+After updating, verify Supervisor reports `0.2.2` and its `/homeassistant` mount
+is writable. In an actual interactive terminal inside the MCP container, run
+`/app/phase3-operator init` once to initialize protected operator state. It does
+not apply a proposal or reload Home Assistant. Never replace/delete missing or
+uncertain keys to bypass a refusal.
+
+For a specific pending supported automation proposal, run
+`/app/phase3-operator apply-proposal <UUID> --enable-writes`, review the displayed
+diff and type its exact confirmation. Recovery independently requires
+`/app/phase3-operator recover --enable-writes` and its displayed confirmation.
+There is no unattended `--yes` path or persistent global write-enable option.
+Do not run these effect commands just to test that enablement worked.
+
+Keep a backup outside the Pi. Restore testing may be waived explicitly by the
+deployment owner; record the untested status. MCP tools and runtime policy remain
+read-only, regardless of the writable mount or operator initialization.
+
+## Historical read-only Pi packaging checks for 0.2.1
 
 Run the following inside the **Engineering MCP add-on container**. A shell in a
 different Terminal/SSH add-on has a different filesystem and cannot validate these
