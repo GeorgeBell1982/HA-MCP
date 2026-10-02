@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Add the guarded automation proposal path, Home Assistant semantic validation and loaded-configuration verification.
+- Package the explicit local terminal operator with audited approval/recovery and bounded transaction archive/resume.
+- Keep MCP tools and the Home Assistant configuration mount read-only; installing this release does not enable apply, reload or recovery writes.
+- Pass 1,340 tests and 24 disposable Linux amd64/Home Assistant workflow checks. Native Raspberry Pi aarch64 build and actual Supervisor acceptance remain to be verified on the Pi.
+
 ## 0.2.0
 
 - Activate secure read-only Home Assistant configuration inspection and protected proposal tools behind an add-on switch.

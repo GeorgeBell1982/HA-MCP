@@ -37,9 +37,9 @@ const nativeOutputs = [
 ] as const;
 
 describe("installable add-on packaging", () => {
-  it("is aarch64-only, released at 0.2.0, and least privilege", async () => {
+  it("is aarch64-only, released at 0.2.1, and least privilege", async () => {
     const manifest = await readFile("addon/config.yaml", "utf8");
-    expect(manifest).toMatch(/^version: "0\.2\.0"$/m);
+    expect(manifest).toMatch(/^version: "0\.2\.1"$/m);
     expect(manifest).toContain("- aarch64");
     expect(manifest).toContain("homeassistant_api: true");
     expect(manifest).toMatch(

@@ -3,6 +3,14 @@
 The supported Phase 1 target is Home Assistant OS 18.1 on Raspberry Pi 5
 (`aarch64`). No host shell is needed.
 
+Published source release `0.2.1` contains the guarded local operator and retention
+implementation while preserving the read-only configuration mapping. Home
+Assistant builds this add-on locally on the Pi; no prebuilt `image` is configured.
+Refresh the repository in the App store, confirm version `0.2.1`, and install or
+update it. Keep existing pairing and network options. Native aarch64 build and
+actual Supervisor acceptance are pending until that installation is verified;
+installation does not authorize or enable configuration writes.
+
 1. Use the published add-on repository URL:
    `https://github.com/GeorgeBell1982/HA-MCP`.
 2. In **Settings > Apps > App store > Repositories**, add that repository URL.

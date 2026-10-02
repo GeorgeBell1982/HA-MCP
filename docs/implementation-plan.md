@@ -3,7 +3,7 @@
 Risk: `HIGH`. This plan requires independent review before implementation. No phase authorizes live Home Assistant mutation, Git commit, push, deployment, or token access.
 
 Current context (2026-10-02): Phase 1 has historical live acceptance; Phase 2 is
-conditionally wired into source add-on `0.2.0`, with native aarch64 and live
+conditionally wired into source add-on `0.2.1`, with native aarch64 and live
 deployment gates still unverified in the retained record. The scoped Phase 3 local
 operator, audited recovery, bounded archive/resume, and disposable real-HA workflow
 are implemented and verified on Linux amd64. The packaged add-on mapping remains

@@ -358,6 +358,19 @@ acceptance, production backup/deployment and write enablement remain separate
 gates. No production token, HA data, mount or service was used or changed. Phase 4
 broader builders/deployments remain deferred scope.
 
+## Add-on source release 0.2.1 on 2026-10-02
+
+The user explicitly requested publication for installation on the Pi. The source
+release increments the add-on manifest to `0.2.1` and updates its changelog and
+installation guidance. Home Assistant builds from the published repository on the
+Pi; no prebuilt registry image is configured or claimed. The mount remains
+read-only, HTTP remains disabled by default, and no MCP mutation tools are enabled.
+The eight packaging tests, scoped formatting and `git diff --check` passed for the
+release metadata change. The preceding implementation's full 1,340-test and
+24-row disposable-HA evidence remains applicable; native aarch64 build and actual
+Supervisor acceptance await the user's installation. Publication does not install,
+restart, change configuration or access credentials on the production Pi.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

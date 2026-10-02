@@ -16,7 +16,7 @@ HA validation/reload/loaded-state proof, shared queue, typed local operator appr
 and recovery, grant/journal linkage, and one-transaction epoch archive/resume are
 implemented. Disposable Linux amd64/native/HA and automated real-terminal evidence
 are recorded in the ledger. The explicit operator wrapper/helper are packaged;
-the add-on version and read-only mapping are unchanged, so production apply/recovery
+source release `0.2.1` retains the read-only mapping, so production apply/recovery
 remain unavailable. Native aarch64, actual Supervisor deployment, backup and write
 enablement approval remain open. Custody/key extensions are deferred research.
 Start with the
