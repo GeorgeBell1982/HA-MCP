@@ -58,10 +58,10 @@ Phase 3A remains an unregistered, adapter-neutral core. No MCP apply/recovery/gr
 tool is registered. `phase3Contract.writesEnabled: false` describes MCP/default
 policy; the separate Linux add-on operator CLI requires the literal per-command
 `--enable-writes` flag and both input/output TTYs before composing a write policy.
-Environment write flags still cannot enable the server. The add-on version and
-read-only `/homeassistant` mapping are unchanged. The operator wrapper and atomic
-helper are packaged for verification; the read-only mapping refuses apply/recovery
-before approval consumption. This is staged source, not production enablement.
+Environment write flags still cannot enable the server. Add-on `0.2.2` maps
+`/homeassistant` writable to permit the explicit local operator. Earlier `0.2.1`
+maps it read-only and refuses apply/recovery before approval consumption. Release
+installation never applies a proposal; exact local approval remains required.
 
 ## Local operator and epoch lifecycle
 

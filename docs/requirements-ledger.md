@@ -722,6 +722,26 @@ remain unverified. No restore, live configuration write or production enablement
 was performed or authorized by these screenshots. The screenshot attachments are
 kept outside version control; only this bounded factual record is committed.
 
+## User-authorized local operator enablement on 2026-10-02
+
+The user confirmed the backup is downloaded on their phone, explicitly declined
+restore testing, and then requested production write enablement (`Please enable`).
+Restore remains untested by accepted user choice and is no longer a blocking gate.
+Authorization is to enable the existing guarded local operator, not apply an
+unspecified proposal or fabricate its separate typed human approval.
+
+Release `0.2.2` changes the static Supervisor configuration mount from read-only
+to writable and retains the existing runtime code. This expands container
+filesystem permissions, but adds no MCP mutation tool, write environment flag,
+automatic reload, broad Supervisor permission, Docker socket or host privilege.
+The local operator still requires both terminal streams, a per-command
+`--enable-writes` flag for apply/recovery, exact typed approval, durable audit,
+single-use grant and coordinator checks. Deployment/state initialization evidence
+will be recorded after installation; source publication alone is not enablement.
+Prepublication authoritative verification passed 49 files, 1341 tests with 16
+platform skips. Independent read-only review found no blockers. Read-only Pi
+metadata checks confirmed both operator state directories absent before deployment.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

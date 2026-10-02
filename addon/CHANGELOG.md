@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Permit the guarded local terminal operator by mapping Home Assistant configuration writable. Installing this version expands container filesystem permissions.
+- Keep MCP tools read-only; each apply/recovery command still requires `--enable-writes`, a real terminal and exact typed confirmation. No automatic apply, reload or recovery is enabled.
+- Native Pi real Home Assistant workflow passed all 24 checks; approval, persistence and isolated workflow matrices also passed. Git remains unavailable on Pi kernels without Landlock.
+
 ## 0.2.1
 
 - Add the guarded automation proposal path, Home Assistant semantic validation and loaded-configuration verification.

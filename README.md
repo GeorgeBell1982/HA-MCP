@@ -5,15 +5,17 @@ configuration proposals. It supports local stdio and an
 installable HA OS aarch64 add-on with paired, TLS-only Streamable HTTP plus a pinned
 local stdio bridge. The managed add-on can enable Phase 2 configuration and Git
 inspection plus proposal storage after startup security gates pass. Home Assistant
-configuration is mounted read-only at `/homeassistant`; proposals write only to
+configuration is mounted writable at `/homeassistant` in add-on `0.2.2` for the
+guarded local terminal operator; MCP proposals write only to
 protected `/data`. Apply, restart, deletion, arbitrary service calls, shell, and Git
 writes are absent from the MCP runtime. Phase 3 components and their disposable
-workflow proof of concept remain isolated from runtime composition.
+workflow are composed only by the explicit local operator, with per-command write
+enablement and typed terminal approval.
 
 Start with the [current project context](docs/recovery.md#project-context-as-of-2026-10-02)
 for implemented capabilities, historical live acceptance, remaining gates, and
-resumption guidance. The source add-on version is `0.2.0`; its live installation
-has not been verified in the retained deployment record.
+resumption guidance. The source add-on version is `0.2.2`; deployment and acceptance
+evidence are recorded separately from source publication.
 
 See [deployment](docs/deployment.md), [Codex setup](docs/codex-setup.md),
 [security](docs/security.md), and [tool reference](docs/tool-reference.md).

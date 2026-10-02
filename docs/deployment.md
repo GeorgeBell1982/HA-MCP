@@ -3,13 +3,15 @@
 The supported Phase 1 target is Home Assistant OS 18.1 on Raspberry Pi 5
 (`aarch64`). No host shell is needed.
 
-Published source release `0.2.1` contains the guarded local operator and retention
-implementation while preserving the read-only configuration mapping. Home
+Source release `0.2.2` permits the guarded local operator with a writable
+configuration mapping. MCP tools remain read-only; local apply/recovery still
+require `--enable-writes`, a real terminal and exact typed approval. Home
 Assistant builds this add-on locally on the Pi; no prebuilt `image` is configured.
-Refresh the repository in the App store, confirm version `0.2.1`, and install or
-update it. Keep existing pairing and network options. Native aarch64 build and
-actual Supervisor acceptance are pending until that installation is verified;
-installation does not authorize or enable configuration writes.
+Refresh the repository in the App store, confirm version `0.2.2`, and install or
+update it only when local operator capability is wanted. Keep existing pairing
+and network options. Installation expands filesystem permissions; no proposal
+is automatically applied. Native Pi disposable workflow evidence is recorded in
+the requirements ledger; actual production deployment is recorded separately.
 
 1. Use the published add-on repository URL:
    `https://github.com/GeorgeBell1982/HA-MCP`.
@@ -26,7 +28,7 @@ installation does not authorize or enable configuration writes.
 6. Keep the internal add-on `bind` at `0.0.0.0` so Supervisor port forwarding can reach it, set the matching external-LAN `allowed_host`, publish TCP 8443,
    then set `enable_http: true` and restart the add-on.
 
-The wildcard is permitted only in verified add-on mode; the port remains unpublished (`null`) until explicitly configured, TLS/auth and exact Host checks remain mandatory, and local mode still rejects wildcard binds. The add-on requests only `homeassistant_api`. It has only the read-only `homeassistant_config` mapping and no Docker,
+The wildcard is permitted only in verified add-on mode; the port remains unpublished (`null`) until explicitly configured, TLS/auth and exact Host checks remain mandatory, and local mode still rejects wildcard binds. The add-on requests only `homeassistant_api`. It has only the writable `homeassistant_config` mapping and no Docker,
 privileged, host-network, or broad Supervisor access. Inside the add-on container,
 port 8099 binds a wildcard so the Supervisor ingress proxy can reach it, but it has no
 host port mapping and is accessible only through authenticated Home Assistant ingress.
