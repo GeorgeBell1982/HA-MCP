@@ -497,6 +497,40 @@ no proposal, configuration, reload, restart or mount change was made. Documentat
 formatting and `git diff --check` passed; actual target commands supply the fresh
 verification evidence for this documentation-only change.
 
+## Native Pi durable approval fault matrix on 2026-10-02
+
+Following the user's continuation instruction, the unchanged Phase 3M approval
+harness ran against the installed `0.2.1` image in a separate owned container on
+the actual aarch64 Pi. The fixture cloned image ID
+`sha256:5145e004442b7e7e23466b3b793bb302571e7a656fd6416f7b5099d789dfc43e`;
+it did not exec fault tests in the running MCP service. Limits were one CPU,
+512 MiB memory/no extra swap, and 128 PIDs. No bind mounts, Docker socket, live
+configuration/data mounts or Supervisor credentials were supplied. The pinned
+compiler/binutils packages from the existing Dockerfile were installed only in the
+fixture, then its bridge network was disconnected and the empty network map was
+verified. The installed image's own `dist`/dependencies were used with unchanged
+repository harness/worker/shim files under `/fixture`.
+
+```sh
+node scripts/linux/phase3-approval-harness.mjs --cc /usr/bin/cc --native-root /fixture
+```
+
+The machine-readable manifest required 56 rows; the final summary reported
+`PASSED`, required/executed/passed `56`, no non-passing rows, and process exit zero.
+Evidence covers default filesystem/durability adapters on native overlay storage,
+private-root ownership, same/different-key initialization races, wrong-key restart,
+issue/consume/replay, colliding UUIDs, consume contention, artifact tampering,
+exhaustion retries, adverse header/root topology, true process kills at commit
+boundaries, and scoped open/pwrite/ENOSPC/fsync/link/rename faults. Worker/process
+group and harness state cleanup completed. The owned outer fixture is retained
+only for the subsequent persistence/POC checks and will be removed at closeout.
+
+No live keys or approval records were initialized or read. This is native Pi
+approval fault evidence, not human authorization, full grant/receipt topology
+coverage, real power-cut durability, or production write enablement. Native
+persistence/POC and full Git/image/provenance gates remain separately recorded.
+Documentation formatting and `git diff --check` passed for this evidence update.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.
