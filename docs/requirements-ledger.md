@@ -1754,3 +1754,22 @@ Three regressions cover a 2.7 MB catalog, unrelated oversized responses and the
 16 platform-gated skips. Source mirror and diff checks passed. This patch changes
 response admission only; the earlier 29-row native amd64/Pi effect-path fixture
 acceptance applies to the unchanged dashboard effect implementation.
+
+### Installed 0.3.1 acceptance on 2026-10-03
+
+Commit ed3a1db was pushed, the app repository refreshed and source 0.3.1 installed
+through Supervisor update with a partial backup. Installed version/state are
+0.3.1/started; guarded writes and setup remain enabled with the owner's LAN frontend
+origin. Fresh live read-only acceptance passed all catalogs: 921 integration
+handlers, 4,006 HACS repositories and 100 Supervisor apps. A fresh pinned TLS
+bridge connection listed all 36 tools and read Sunsynk through the MCP. The Core
+container remained up throughout these add-on updates; no Core/app setup restart,
+third-party installation or dashboard save had occurred at this acceptance point.
+
+The current chat's cached tool metadata predates the new names, so a temporary
+SDK client uses the existing configured stdio bridge, pairing file, certificate and
+pin without exposing credentials or altering Codex processes. Its real MCP form
+request is presented to the owner in this chat; the exact response is relayed only
+after explicit human approval. It never auto-accepts a request. The temporary
+adapter is removed when the operation settles. This is separate from claiming the
+chat's built-in tool metadata has refreshed.

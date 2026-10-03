@@ -228,3 +228,12 @@ isolation tests, POC manifest, and local Git history. The recent-chat inventory
 returned no prior Home Assistant chat among its 50 entries; older/archived chats
 were not exhaustively searched. No credentials, HA endpoint, remote repository,
 deployment, or production state were accessed or changed.
+
+### Current live deployment 0.3.1
+
+Both source pieces are committed/pushed (c72c879 dashboard/setup, ed3a1db bounded
+large HACS catalogs). Supervisor installed 0.3.1 with partial backups. Guarded writes
+and setup are enabled, and setup_frontend_url is the owner's LAN HA origin. Live
+reads prove 36 MCP tools plus integration/HACS/Supervisor catalogs (921/4006/100).
+The requested Sunsynk top-gap proposal is awaiting exact human approval in chat;
+no dashboard save or third-party install has been performed at this checkpoint.
