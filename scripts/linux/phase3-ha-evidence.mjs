@@ -45,6 +45,8 @@ export const mainWorkerRows = Object.freeze([
   "native-mcp-fixture-decline-and-cancellation-before-effect",
   "native-mcp-fixture-approved-real-producer-apply-and-loaded-ha-proof",
   "native-mcp-fixture-rotation-preserves-live-config-and-reload-count",
+  "native-dashboard-api-read-proposal-approval-save-and-readback",
+  "native-dashboard-source-drift-and-uncertain-send-no-replay",
 ]);
 export const readonlyWorkerRows = Object.freeze([
   "actual-wrapper-readonly-mount-refuses-apply-and-recovery-before-grant-or-audit",

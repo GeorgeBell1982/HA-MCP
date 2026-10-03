@@ -114,6 +114,16 @@ describe("MCP inventory", () => {
     const client = new Client({ name: "stdio-test", version: "1" });
     await client.connect(transport);
     const inventory = await client.listTools();
+    const dashboardGet = inventory.tools.find(
+      (tool) => tool.name === "ha_get_dashboard",
+    );
+    expect(dashboardGet?.inputSchema.properties).toHaveProperty("urlPath");
+    expect(dashboardGet?.inputSchema.properties).not.toHaveProperty("entityId");
+    expect(dashboardGet?.inputSchema.required).toContain("urlPath");
+    expect(
+      inventory.tools.find((tool) => tool.name === "ha_list_dashboards")
+        ?.inputSchema.properties,
+    ).toEqual({});
     expect(inventory.tools.map((tool) => tool.name)).toContain(
       "ha_get_system_info",
     );

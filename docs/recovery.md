@@ -14,6 +14,18 @@ approval through the originating client's form UI.
 
 ## Project context as of 2026-10-03
 
+The owner subsequently requested dashboard edits and all third-party setup through
+MCP, with the agent doing preparation, installation and verification and the owner
+approving effects in chat. Source `0.3.0` implements storage dashboard reads/patches,
+guarded API changes and settled-history archival, plus opt-in Core integration
+flows, HACS repositories/components and Supervisor repositories/apps/options/start/
+restart. Provider authentication remains a secure account-owner handoff when needed.
+The manifest grants Supervisor manager authority even if setup tools are disabled.
+`pnpm verify` passed 1,430 tests with 16 platform-gated skips; 29 disposable real-HA
+checks passed on amd64 and the native Pi. Independent review approved the final
+change. Publication/deployment and the requested Sunsynk top gap are tracked below
+as separate live steps; fixture approvals never authorize a production change.
+
 Latest requested extension: the owner wants MCP changes with approval in this
 chat. Release `0.2.3` is published and installed with guarded MCP writes enabled.
 It adds the opt-in guarded automation apply, completed epoch

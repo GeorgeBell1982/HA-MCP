@@ -3,7 +3,7 @@
 Current guarded MCP application is an explicit exception to the historical
 read-only inventories below. Add-on `0.2.3` defaults `enable_mcp_writes` off and
 requires managed add-on mode plus successful Phase 2 activation. The only live
-write is application of a stored automation proposal, approved via form elicitation
+automation write is application of a stored automation proposal, approved via form elicitation
 bound to the originating MCP request/session. Tool arguments cannot supply approval.
 Exact display/identity are reread after approval; the existing protected single-use
 grant, OS lease, audit, checkpoint, validation, rollback and verification apply.
@@ -11,6 +11,16 @@ Mutations are not replayed by the bridge. All paired clients with this capabilit
 are trusted to present human approval honestly; this is not a human identity proof.
 The approval check makes no HA changes, and epoch rotation changes only protected
 transaction state. Manual recovery remains terminal-only.
+
+Version `0.3.0` adds dashboard saves and separately enabled third-party setup.
+Each approved API operation is sent once under the same operator lease, with a
+private checkpoint and read-back verification. Unknown outcomes are retained and
+block further changes to that target. Dashboard/config APIs offer no atomic CAS.
+Supervisor manager authority is granted by the manifest even if setup is disabled;
+the option hides setup tools but does not reduce the container's runtime authority.
+Fixed Supervisor endpoints cover app installation/options/start/restart and Core
+restart; each disruptive operation needs separate approval. See
+[setup scope and authentication limits](third-party-setup.md).
 
 Phase 1 is read-only. The add-on requests only `homeassistant_api`, has no `/config`
 mapping, and the MCP inventory contains no mutation, restart, delete, generic service,
@@ -35,7 +45,8 @@ certificate as a startup trust anchor and an independently verified SHA-256 DER
 certificate fingerprint. Public, Cloudflare, reverse-proxy, and plaintext non-loopback
 operation are unsupported.
 
-The Supervisor token is runtime-injected and used only against the fixed Core proxy.
+The Supervisor token is runtime-injected and used only against the fixed Core proxy
+and the finite Supervisor setup endpoints in version `0.3.0`.
 REST redirects are rejected and safe reads have bounded retries/timeouts. WebSocket
 authentication, requests, disconnect rejection, timeouts, and bounded reconnect are
 implemented without putting credentials in URLs. Audit JSONL is mandatory, redacted,

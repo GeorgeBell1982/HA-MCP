@@ -13,6 +13,8 @@ const schema = z.object({
   HA_ENABLE_HTTP: bool,
   HA_ENABLE_PHASE2: bool,
   HA_ENABLE_MCP_WRITES: bool,
+  HA_ENABLE_MCP_SETUP: bool,
+  HA_SETUP_FRONTEND_URL: z.union([z.literal(""), z.string().url()]).optional(),
   HA_ENABLE_WRITES: bool,
   HA_ENABLE_RESTART: bool,
   HA_ENABLE_DELETES: bool,
@@ -25,6 +27,8 @@ export interface Config {
   enableHttp: boolean;
   enablePhase2: boolean;
   enableMcpWrites: boolean;
+  enableMcpSetup: boolean;
+  setupFrontendUrl?: URL | undefined;
   enableWrites: false;
   enableRestart: false;
   enableDeletes: false;
@@ -66,11 +70,19 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     mode: d.HA_MODE,
     baseUrl: url,
     token,
+    setupFrontendUrl: d.HA_SETUP_FRONTEND_URL
+      ? new URL(d.HA_SETUP_FRONTEND_URL)
+      : undefined,
     auditPath: d.HA_AUDIT_LOG_PATH,
     enableHttp: d.HA_ENABLE_HTTP,
     enablePhase2: d.HA_MODE === "addon" && d.HA_ENABLE_PHASE2,
     enableMcpWrites:
       d.HA_MODE === "addon" && d.HA_ENABLE_PHASE2 && d.HA_ENABLE_MCP_WRITES,
+    enableMcpSetup:
+      d.HA_MODE === "addon" &&
+      d.HA_ENABLE_PHASE2 &&
+      d.HA_ENABLE_MCP_WRITES &&
+      d.HA_ENABLE_MCP_SETUP,
     enableWrites: false,
     enableRestart: false,
     enableDeletes: false,
@@ -92,6 +104,11 @@ export function publicPolicy(
       env.HA_MODE === "addon" &&
       env.HA_ENABLE_PHASE2 === "true" &&
       env.HA_ENABLE_MCP_WRITES === "true",
+    guardedSetupRequested:
+      env.HA_MODE === "addon" &&
+      env.HA_ENABLE_PHASE2 === "true" &&
+      env.HA_ENABLE_MCP_WRITES === "true" &&
+      env.HA_ENABLE_MCP_SETUP === "true",
     configMapping: runtime.configMapping === true,
     phase2Enabled: runtime.phase2Active === true,
     phase2Requested: env.HA_MODE === "addon" && env.HA_ENABLE_PHASE2 === "true",

@@ -52,6 +52,11 @@ import { Phase3OfflineRetention } from "../../dist/phase3/retention.js";
 import { acquirePhase3OperatorLease } from "../../dist/phase3/operatorLease.js";
 import { runPhase3McpCommand } from "../../dist/phase3/operatorRuntime.js";
 import { sha256 } from "../../dist/phase3/contracts.js";
+import { HaWebSocketClient } from "../../dist/ha/websocket.js";
+import { HaDashboardClient, dashboardHash } from "../../dist/ha/dashboards.js";
+import { JsonlAudit } from "../../dist/audit.js";
+import { GuardedActionService } from "../../dist/guardedChanges.js";
+import { buildDashboardChangeRegistry } from "../../dist/dashboardTools.js";
 
 const root = "/fixture/config";
 const state = "/fixture/state";
@@ -69,6 +74,129 @@ function assert(value, code) {
 }
 function row(value) {
   process.stdout.write(`PASSED ${value}\n`);
+}
+async function dashboardEvidence(request) {
+  const ws = new HaWebSocketClient(
+    new URL("ws://127.0.0.1:8123/api/websocket"),
+    request.token,
+  );
+  try {
+    await ws.connect();
+    await ws.request("lovelace/dashboards/create", {
+      url_path: "dashboard-fixture",
+      title: "Disposable dashboard",
+    });
+    const ha = new HaDashboardClient(ws);
+    const original = {
+      views: [
+        {
+          title: "Solar",
+          type: "panel",
+          cards: [{ type: "markdown", content: "Fixture" }],
+        },
+      ],
+    };
+    await ha.save("dashboard-fixture", original);
+    const audit = new JsonlAudit(join(state, "dashboard-audit.jsonl"));
+    const actions = new GuardedActionService(
+      join(state, "dashboard-changes"),
+      audit,
+      () => acquirePhase3OperatorLease("/data/phase3-runtime"),
+    );
+    const tools = buildDashboardChangeRegistry(ha, actions, audit);
+    const propose = async (content) => {
+      const current = await ha.read("dashboard-fixture");
+      const p = await tools.call("ha_propose_dashboard_change", {
+        urlPath: "dashboard-fixture",
+        expectedSha256: dashboardHash(current),
+        patch: [
+          { op: "replace", path: "/views/0/cards/0/content", value: content },
+        ],
+      });
+      assert(p.ok, "dashboard_proposal_failed");
+      return p.result.proposalId;
+    };
+    const approved = {
+      signal: new AbortController().signal,
+      requestApproval: async (r) => r.confirmation,
+    };
+    const id = await propose("Updated fixture");
+    assert(
+      dashboardHash(await ha.read("dashboard-fixture")) ===
+        dashboardHash(original),
+      "dashboard_proposal_had_effect",
+    );
+    let refused = false;
+    try {
+      await actions.apply(id, {
+        ...approved,
+        requestApproval: async () => "declined",
+      });
+    } catch {
+      refused = true;
+    }
+    assert(
+      refused &&
+        dashboardHash(await ha.read("dashboard-fixture")) ===
+          dashboardHash(original),
+      "dashboard_decline_had_effect",
+    );
+    const result = await actions.apply(id, approved);
+    assert(
+      result.status === "verified" &&
+        (await ha.read("dashboard-fixture")).views[0].cards[0].content ===
+          "Updated fixture",
+      "dashboard_readback_failed",
+    );
+    row("native-dashboard-api-read-proposal-approval-save-and-readback");
+    const driftId = await propose("Should not apply");
+    const drift = await ha.read("dashboard-fixture");
+    drift.views[0].title = "External drift";
+    await ha.save("dashboard-fixture", drift);
+    refused = false;
+    try {
+      await actions.apply(driftId, approved);
+    } catch {
+      refused = true;
+    }
+    assert(
+      refused &&
+        (await ha.read("dashboard-fixture")).views[0].title ===
+          "External drift",
+      "dashboard_drift_overwritten",
+    );
+    const uncertainId = await propose("Committed but response lost");
+    const save = ha.save.bind(ha);
+    let saves = 0;
+    ha.save = async (...args) => {
+      saves++;
+      await save(...args);
+      throw new Error("fixture_lost_response");
+    };
+    refused = false;
+    try {
+      await actions.apply(uncertainId, approved);
+    } catch {
+      refused = true;
+    }
+    assert(
+      refused &&
+        (await actions.get(uncertainId)).status === "uncertain" &&
+        saves === 1,
+      "dashboard_uncertainty_not_retained",
+    );
+    const another = await propose("Must refuse");
+    refused = false;
+    try {
+      await actions.apply(another, approved);
+    } catch {
+      refused = true;
+    }
+    assert(refused && saves === 1, "dashboard_uncertain_replayed");
+    row("native-dashboard-source-drift-and-uncertain-send-no-replay");
+  } finally {
+    ws.close();
+  }
 }
 async function leaseEvidence(request) {
   const parent = join(state, "lease-proof");
@@ -1029,6 +1157,7 @@ try {
   await epoch.approvals.close();
   await recoveredLease.release();
   await actualOperatorEvidence(request);
+  await dashboardEvidence(request);
   baseline.fill(0);
   key.fill(0);
 } catch (error) {

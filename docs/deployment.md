@@ -1,5 +1,13 @@
 # Home Assistant OS add-on deployment
 
+Source `0.3.0` adds guarded dashboard changes and optional third-party setup.
+It requests `hassio_api` with the `manager` role; this is a permission expansion
+and remains container authority when `enable_mcp_setup` is false. Setup requires
+that option plus `enable_mcp_writes` and Phase 2. Set `setup_frontend_url` to the
+browser-accessible Home Assistant origin for integration flows. Preserve pairing,
+TLS and existing options during update. Source publication and live deployment
+are separate; the older acceptance entries below describe their stated versions.
+
 The supported Phase 1 target is Home Assistant OS 18.1 on Raspberry Pi 5
 (`aarch64`). No host shell is needed.
 

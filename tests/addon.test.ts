@@ -37,9 +37,13 @@ const nativeOutputs = [
 ] as const;
 
 describe("installable add-on packaging", () => {
-  it("is aarch64-only, released at 0.2.3, and permits guarded application without broad host privileges", async () => {
+  it("is aarch64-only, released at 0.3.0, and permits guarded application without broad host privileges", async () => {
     const manifest = await readFile("addon/config.yaml", "utf8");
-    expect(manifest).toMatch(/^version: "0\.2\.3"$/m);
+    expect(manifest).toMatch(/^version: "0\.3\.0"$/m);
+    expect(manifest).toContain("hassio_api: true");
+    expect(manifest).toContain("hassio_role: manager");
+    expect(manifest).toContain("enable_mcp_setup: false");
+    expect(manifest).toContain("setup_frontend_url: str");
     expect(manifest).toContain("- aarch64");
     expect(manifest).toContain("homeassistant_api: true");
     expect(manifest).toMatch(

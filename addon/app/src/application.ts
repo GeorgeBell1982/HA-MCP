@@ -5,6 +5,11 @@ import { HaRestClient, type HaState } from "./ha/rest.js";
 import { redact } from "./redaction.js";
 import { z } from "zod";
 import type { ToolDescriptor, ToolRegistry } from "./toolRegistry.js";
+import {
+  dashboardHash,
+  dashboardPathSchema,
+  type HaDashboardClient,
+} from "./ha/dashboards.js";
 export interface ToolInput {
   entityId?: string | undefined;
   query?: string | undefined;
@@ -15,11 +20,7 @@ export interface ToolInput {
 export interface HaSystemLogClient {
   systemLogEntries(): Promise<unknown>;
 }
-const unsupported = new Set([
-  "ha_list_dashboards",
-  "ha_get_dashboard",
-  "ha_list_blueprints",
-]);
+const unsupported = new Set(["ha_list_blueprints"]);
 const domains: Record<string, string[]> = {
   ha_list_automations: ["automation"],
   ha_list_scripts: ["script"],
@@ -47,6 +48,7 @@ const baseInput = z
   })
   .strict();
 const emptyInput = z.object({}).strict();
+const dashboardGetInput = z.object({ urlPath: dashboardPathSchema }).strict();
 const entityInputs: Record<string, z.ZodType<ToolInput>> = {
   ha_get_entity_state: z
     .object({ entityId: z.string().regex(/^[a-z0-9_]+\.[a-z0-9_]+$/) })
@@ -78,32 +80,41 @@ const phase1ToolNames = Object.freeze([
 const phase1ToolDescription =
   "Read-only. No approval, reload, restart, file modification, or Git commit.";
 const phase1McpInput = z.record(z.unknown());
+function readDescriptor(name: string): ToolDescriptor {
+  return {
+    name,
+    description:
+      name === "ha_get_dashboard"
+        ? "Read a dashboard by its URL path (null for the default). Returns a redacted config and unredacted source hash for a bounded patch proposal. No live changes."
+        : name === "ha_list_dashboards"
+          ? "List Home Assistant dashboard URL paths, titles and storage/YAML modes. No live changes."
+          : phase1ToolDescription,
+    inputSchema:
+      name === "ha_get_dashboard"
+        ? dashboardGetInput
+        : name === "ha_list_dashboards"
+          ? emptyInput
+          : phase1McpInput,
+    annotations: { readOnlyHint: true },
+  };
+}
 
 export class ReadTools implements ToolRegistry {
   constructor(
     private readonly ha: HaRestClient,
     private readonly systemLog: HaSystemLogClient,
     private readonly audit: JsonlAudit,
+    private readonly dashboards?: HaDashboardClient,
   ) {}
   names(): readonly string[] {
     return phase1ToolNames;
   }
   descriptors(): readonly ToolDescriptor[] {
-    return Object.freeze(
-      phase1ToolNames.map((name) => ({
-        name,
-        description: phase1ToolDescription,
-        inputSchema: phase1McpInput,
-      })),
-    );
+    return Object.freeze(phase1ToolNames.map(readDescriptor));
   }
   descriptor(name: string): ToolDescriptor | undefined {
     return this.names().includes(name)
-      ? Object.freeze({
-          name,
-          description: phase1ToolDescription,
-          inputSchema: phase1McpInput,
-        })
+      ? Object.freeze(readDescriptor(name))
       : undefined;
   }
   async call(name: string, rawInput: unknown): Promise<Envelope<unknown>> {
@@ -113,6 +124,7 @@ export class ReadTools implements ToolRegistry {
       if (!this.names().includes(name))
         throw new SafeError("invalid_input", "Unknown tool");
       const schema =
+        (name === "ha_get_dashboard" ? dashboardGetInput : undefined) ??
         entityInputs[name] ??
         ([
           "ha_get_system_info",
@@ -139,7 +151,21 @@ export class ReadTools implements ToolRegistry {
         );
       if (name === "ha_get_system_info" || name === "ha_get_config_status")
         data = await this.ha.config();
-      else if (
+      else if (name === "ha_list_dashboards" || name === "ha_get_dashboard") {
+        if (!this.dashboards)
+          throw new SafeError(
+            "capability_unavailable",
+            "Dashboard API is unavailable",
+          );
+        if (name === "ha_list_dashboards") data = await this.dashboards.list();
+        else {
+          const urlPath = (parsed.data as { urlPath: string | null }).urlPath;
+          const config = await this.dashboards.read(urlPath);
+          data = { urlPath, config, sha256: dashboardHash(config) };
+        }
+        evidence =
+          "Home Assistant Lovelace WebSocket API, verified against Core 2026.9.4";
+      } else if (
         name === "ha_get_entity_state" ||
         name === "ha_get_automation" ||
         name === "ha_get_script"

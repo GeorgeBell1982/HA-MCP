@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Read storage dashboards, propose bounded layout patches, show the exact diff for chat approval, save once and verify the resulting configuration.
+- Add opt-in integration setup, HACS integration/frontend repositories and Supervisor app installation, options, start and restart. Every effect has a separate approved proposal.
+- Preserve private checkpoints, audit refusals, block uncertain operation replay and archive settled history through chat approval.
+- Grant Supervisor manager API authority in the add-on manifest. This authority exists even when setup tools are disabled; `enable_mcp_setup` controls tool exposure only. Provider login, MFA and consent may still require the account owner's authentication.
+
 ## 0.2.3
 
 - Add opt-in MCP application of pending automation proposals with exact-diff human approval through form elicitation. Unsupported or declined approvals fail closed.

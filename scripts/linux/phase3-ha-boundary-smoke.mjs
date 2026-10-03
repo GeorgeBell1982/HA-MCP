@@ -131,7 +131,7 @@ try {
     image,
     "-c",
     setup,
-    "homeassistant:\n  name: Disposable Phase 3\nhttp:\napi:\nconfig:\nfrontend:\nonboarding:\nautomation: !include automations.yaml\n",
+    "homeassistant:\n  name: Disposable Phase 3\nhttp:\napi:\nconfig:\nfrontend:\nlovelace:\nonboarding:\nautomation: !include automations.yaml\n",
     original.toString(),
     nonce,
   );

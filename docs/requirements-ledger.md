@@ -1694,3 +1694,44 @@ Validation evidence on 2026-07-23: Windows focused tests, whole-repository forma
 Repair-cycle-1 independent-review closure evidence on 2026-07-23: the focused test now proves exact first-read candidate transfer, a distinct wiped verification target with no additional 32-byte read target, repeatable fixed-index release wiping after caller/prototype manipulation, exact once-only key-then-parent close attempts after key-close rejection, primary corrupt/unsafe precedence over simultaneous key/parent close failures, and post-cleanup candidate/verification wiping. Windows focused tests passed 39 with five native-gated skips; authoritative `CI=true pnpm.cmd verify` exited zero with all 40 files, 1,121 tests passed, and 14 skipped. Repository formatting/lint/typecheck/build, add-on source lint, add-on context, mirror, scope, and diff checks passed. The final pinned network-disabled Linux run executed all 44 focused and isolation cases with zero skips. The final same-snapshot offline clean-room verify passed Phase 3Q 35/35 and isolation 9/9, then reproduced only the same seven inherited `74009ea` baseline failures with 1,123 tests passed and five skipped. A fresh independent post-repair review found no actionable issues and returned `APPROVED`.
 
 Explicit residuals: external non-rollback authority and epoch; absent-store authorization; descriptor-relative access; lifecycle lock; transient swaps, namespaces, and hostile same-UID mutation; persisted trusted status; separate-process death and actual power loss; corrupt removal; rotation and migration; simultaneous loss, rollback, and backup; operator workflow, custody, audit, composition, registration, activation, release, publication, and live mutation remain `BLOCKED` or `UNVERIFIED`.
+
+### Dashboard and third-party setup source 0.3.0 on 2026-10-03
+
+The owner requested MCP dashboard changes and integration, HACS/frontend and
+Supervisor app setup with the agent handling the work and human approval in chat.
+Implemented bounded storage-dashboard JSON patches with raw-source hashes,
+redacted exact diffs, source rechecks after approval and durable checkpoint, single
+save, read-back verification and uncertain-send replay refusal. Shared guarded
+API operations use the existing OS operator lease. Every registry invocation,
+including schema/refusal/status paths, is durably audited. Secret-key coverage
+includes API/access/private keys and credentials. Settled private checkpoints can
+be archived after approval; uncertain target records remain active. Archive limits
+are 128 active and 1,024 archived records, with lookup across both after interruption.
+Pending proposals and cached integration flows expire on process restart.
+
+Setup is separately opt-in. Finite Core flow, HACS and Supervisor operations
+cover repository registration, install, non-secret forms/options, start and
+separately approved restart. Supervisor installation is proved through installed-only
+inventory plus exact version/state, rather than the uninstalled catalog fallback.
+Flow handler/ID binding and a validated displayed HA-Frontend-Base origin protect
+continuation. Secure provider login/MFA/consent cannot be completed by inventing
+credentials or approval. Runtime manager authority is manifest-granted even with
+setup tools hidden. No live third-party install or restart was used as a test.
+
+Authoritative CI=true pnpm verify passed all 53 files: 1,430 tests passed and 16
+platform-gated tests skipped. An initial full run exposed the acceptance manifest's
+old 27-row assertion; it was updated for the two new dashboard rows and the full
+check passed. The final 29-row real Core 2026.9.4 fixture passed on desktop amd64
+and native Pi arm64, including dashboard approved save/read-back, declined/no-effect,
+source drift and lost-response/no-replay. Fixture containers/volumes were removed.
+The ARM runner used builder sha256:e6cc4a1a9a764c2998bd68060794534354f91bc70347d56edf0a7a53ed2ccd54,
+derived from installed 0.2.3 dependencies plus pinned compiler/Docker packages and
+bounded new source/dist/harness files; no production configuration or credentials
+were mounted. Its owned tag/image was removed. Independent read-only review
+approved, with 57 focused tests, typecheck, ESLint, mirror and diff checks passed.
+
+Residuals: HA dashboard API has no atomic compare/save primitive; same-UID hostile
+filesystem races and power-loss durability are unproven. Interrupted history moves
+may split retained records between active/archive storage, and archive terminal
+capacity is bounded. Actual production setup/provider authentication remains
+unverified. Source publication and deployment are recorded independently below.

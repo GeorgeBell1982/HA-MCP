@@ -43,12 +43,15 @@ export function redact(value: unknown): unknown {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
         key,
-        /token|password|secret|authorization|webhook/i.test(key)
-          ? "[REDACTED]"
-          : redact(item),
+        isSecretKey(key) ? "[REDACTED]" : redact(item),
       ]),
     );
   return value;
+}
+export function isSecretKey(key: string): boolean {
+  return /token|password|passwd|secret|authorization|webhook|credential|api[_-]?key|private[_-]?key|access[_-]?key/i.test(
+    key,
+  );
 }
 export function safeMessage(error: unknown): string {
   return String(

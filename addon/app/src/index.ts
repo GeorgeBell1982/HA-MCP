@@ -13,13 +13,28 @@ import { ensureTlsIdentity } from "./security/tls.js";
 import { buildPhase2Registry } from "./phase2Activation.js";
 import { CompositeToolRegistry } from "./toolRegistry.js";
 import { buildPhase3McpRegistry } from "./phase3/mcpTools.js";
+import { HaDashboardClient } from "./ha/dashboards.js";
+import {
+  GuardedActionService,
+  buildGuardedChangeRegistry,
+} from "./guardedChanges.js";
+import { buildDashboardChangeRegistry } from "./dashboardTools.js";
+import { acquirePhase3OperatorLease } from "./phase3/operatorLease.js";
+import { SetupApiClient } from "./setup/api.js";
+import { buildSetupRegistry } from "./setup/tools.js";
 const config = loadConfig(process.env);
 const audit = new JsonlAudit(config.auditPath);
 await audit.health();
+const websocket = new HaWebSocketClient(
+  deriveWebSocketUrl(config.baseUrl),
+  config.token,
+);
+const dashboards = new HaDashboardClient(websocket);
 const phase1Tools = new ReadTools(
   new HaRestClient(config.baseUrl, config.token),
-  new HaWebSocketClient(deriveWebSocketUrl(config.baseUrl), config.token),
+  websocket,
   audit,
+  dashboards,
 );
 const phase2Tools = await buildPhase2Registry({
   enabled: config.enablePhase2,
@@ -35,11 +50,38 @@ const phase3Tools = buildPhase3McpRegistry(
   phase2Tools !== undefined,
   audit,
 );
+const guardedActions = phase3Tools
+  ? new GuardedActionService("/data/guarded-changes", audit, () =>
+      acquirePhase3OperatorLease("/data/phase3-runtime"),
+    )
+  : undefined;
 const tools = phase2Tools
   ? new CompositeToolRegistry([
       phase1Tools,
       phase2Tools,
       ...(phase3Tools ? [phase3Tools] : []),
+      ...(guardedActions
+        ? [
+            buildDashboardChangeRegistry(dashboards, guardedActions, audit),
+            buildGuardedChangeRegistry(guardedActions, audit),
+          ]
+        : []),
+      ...(guardedActions && config.enableMcpSetup
+        ? [
+            buildSetupRegistry(
+              new SetupApiClient(
+                config.baseUrl,
+                config.token,
+                websocket,
+                config.mode === "addon",
+                fetch,
+                config.setupFrontendUrl,
+              ),
+              guardedActions,
+              audit,
+            ),
+          ]
+        : []),
     ])
   : phase1Tools;
 if (config.mode === "addon") {
