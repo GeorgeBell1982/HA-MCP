@@ -1773,3 +1773,20 @@ request is presented to the owner in this chat; the exact response is relayed on
 after explicit human approval. It never auto-accepts a request. The temporary
 adapter is removed when the operation settles. This is separate from claiming the
 chat's built-in tool metadata has refreshed.
+
+### Sunsynk proposal approval timeout
+
+The real MCP proposed adding /views/0/cards/0/card_mod with the exact style
+`:host { padding-top: var(--vertical-stack-card-gap, var(--stack-card-gap, 8px)); box-sizing: border-box; }`.
+Existing card-mod is loaded, and the top card is a standard panel vertical stack.
+The proposal was 09f31612-f373-4497-ab66-07ac65e280f7 with approval digest
+3abf479a2ba93eb7196d5ab6376f4e0faa206f1d6b8889abeb87b10ad674208f.
+The human question was shown in this chat, but no answer arrived before the real
+MCP form's 120-second timeout. The operation refused approval_inactive before
+checkpoint/send. A fresh MCP read proved the same source hash
+221e40ee029ec77dfd4ed82c180b4972352246e9c2c0ce200aa53b9faec0a3e9
+and no card_mod top padding. No human approval was fabricated or relayed. The
+client closed and its OS-temp script was removed. The top-gap save remains pending
+human approval; source proposals expire 30 minutes after preparation/restart.
+The installed 0.3.1 image is
+sha256:7c3451b6cca2489f17236c02d8c5906decd3efd868cf0feb6a9feab3412cc719.
