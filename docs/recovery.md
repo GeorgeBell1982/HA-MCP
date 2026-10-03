@@ -12,7 +12,7 @@ has downloaded a backup on their phone and waived restore testing. Each local
 effect requires its write flag and typed approval; each opted-in MCP apply requires
 approval through the originating client's form UI.
 
-## Project context as of 2026-10-02
+## Project context as of 2026-10-03
 
 Latest requested extension: the owner wants MCP changes with approval in this
 chat. Release `0.2.3` is published and installed with guarded MCP writes enabled.
@@ -24,9 +24,10 @@ supersedes the historical terminal-only MCP restriction described below. All 1,3
 tests and 27 disposable native/real HA checks on amd64 and Pi arm64 passed, and
 independent review approved the change. Installed health and 29-tool inventory
 passed; unsupported hosts refuse approval. The current chat's inventory has
-reconnected, but its active `never` approval policy still automatically declines
-the harmless check. The prepared granular config must be selected through this
-chat's permissions control, then human prompt acceptance verified. No live
+reconnected and the owner selected Custom mode with granular MCP elicitation
+enabled. The actual originating-chat harmless check confirmed human approval on
+2026-10-03, request `9adcfa95-f0e8-44b5-87f3-ce10cc42ac0c`, with no Home Assistant
+change. HA MCP discovery is now enabled only for this trusted project. No live
 proposal has been applied or authorized by the feature request.
 
 Phase 3 scope was narrowed following the independent proportionality review on the

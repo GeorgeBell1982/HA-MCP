@@ -997,6 +997,24 @@ stopped or restarted. Unrelated loaded connections may remain until their normal
 config reload. Automatic discovery within the HA project remains possible;
 literal connect-only-after-an-HA-request behavior was not implemented or claimed.
 
+### Originating-chat human approval acceptance on 2026-10-03
+
+The owner reported that Custom mode was now available. A check before selecting
+it still returned `approval_declined`, request
+`dfe2f9e3-48a3-4c3e-af4e-2fa5fd7cfd46`, under effective `never` policy. In the
+subsequent turn, the effective policy was granular with MCP elicitations enabled.
+The actual registered `ha_check_approval` tool succeeded through this chat,
+request `9adcfa95-f0e8-44b5-87f3-ce10cc42ac0c`, returning `approvalConfirmed: true`
+and `homeAssistantChanged: false`. This is actual originating-host approval
+acceptance, distinct from the earlier simulated fixture confirmations. No
+approval was supplied through tool arguments or fabricated by the agent.
+
+The approval-display setup gate is now verified. A specific live automation
+change still requires the owner's requested scope, its exact proposal diff and
+fresh per-operation approval. No live proposal was applied by this check. The
+documented 429 diagnostics and failed-initial-connection recovery improvements
+remain recommendations, not implemented behavior.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.
