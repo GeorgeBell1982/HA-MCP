@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Support HACS catalogs up to 4 MiB after the installed 4,006-repository catalog exceeded the general 512 KB WebSocket limit. The larger bound applies only to the exact pending catalog response; other commands retain their existing bound.
+
 ## 0.3.0
 
 - Read storage dashboards, propose bounded layout patches, show the exact diff for chat approval, save once and verify the resulting configuration.

@@ -206,4 +206,41 @@ describe("HA WebSocket", () => {
     await expect(pending).rejects.toThrow("safe size limit");
     expect(sockets[0]!.readyState).toBe(WebSocket.CLOSED);
   });
+  it("accepts a bounded large HACS catalog only for its matching pending response", async () => {
+    const { client, sockets } = harness();
+    await authenticate(client, sockets);
+    const catalog = client.request("hacs/repositories/list");
+    const request = lastRequest(sockets[0]!);
+    const result = [{ description: "x".repeat(2_700_000) }];
+    sockets[0]!.message({
+      id: request.id,
+      type: "result",
+      success: true,
+      result,
+    });
+    await expect(catalog).resolves.toEqual(result);
+    client.close();
+  });
+  it("retains the general bound for another response while a HACS catalog is pending", async () => {
+    const { client, sockets } = harness();
+    await authenticate(client, sockets);
+    const catalog = client.request("hacs/repositories/list");
+    const logs = client.request("system_log/list");
+    const request = lastRequest(sockets[0]!);
+    sockets[0]!.message({
+      id: request.id,
+      type: "result",
+      success: true,
+      result: "x".repeat(600_000),
+    });
+    await expect(logs).rejects.toThrow("safe size limit");
+    await expect(catalog).rejects.toThrow("safe size limit");
+  });
+  it("refuses HACS responses beyond four MiB", async () => {
+    const { client, sockets } = harness();
+    await authenticate(client, sockets);
+    const catalog = client.request("hacs/repositories/list");
+    sockets[0]!.message("x".repeat(4 * 1024 * 1024 + 1));
+    await expect(catalog).rejects.toThrow("safe size limit");
+  });
 });

@@ -2,6 +2,7 @@ import { SafeError } from "../domain.js";
 
 export const CORE_PROXY_WS_URL = "ws://supervisor/core/websocket";
 const MAX_MESSAGE_BYTES = 512_000;
+const MAX_HACS_CATALOG_BYTES = 4 * 1024 * 1024;
 
 export function deriveWebSocketUrl(base: URL): URL {
   if (base.href === "http://supervisor/core/api")
@@ -25,6 +26,7 @@ export class HaWebSocketClient {
       resolve: (value: unknown) => void;
       reject: (error: Error) => void;
       timer: NodeJS.Timeout;
+      maximumBytes: number;
     }
   >();
 
@@ -99,7 +101,15 @@ export class HaWebSocketClient {
           );
           return;
         }
-        if (Buffer.byteLength(event.data, "utf8") > MAX_MESSAGE_BYTES) {
+        const bytes = Buffer.byteLength(event.data, "utf8");
+        const maximumBytes = Math.max(
+          MAX_MESSAGE_BYTES,
+          ...Array.from(
+            this.pending.values(),
+            (request) => request.maximumBytes,
+          ),
+        );
+        if (bytes > maximumBytes) {
           fail(
             new SafeError(
               "upstream_error",
@@ -115,6 +125,19 @@ export class HaWebSocketClient {
             return;
           message = parsed as Record<string, unknown>;
         } catch {
+          return;
+        }
+        const matchedRequest =
+          typeof message.id === "number"
+            ? this.pending.get(message.id)
+            : undefined;
+        if (bytes > (matchedRequest?.maximumBytes ?? MAX_MESSAGE_BYTES)) {
+          fail(
+            new SafeError(
+              "upstream_error",
+              "Home Assistant WebSocket response exceeded the safe size limit",
+            ),
+          );
           return;
         }
         if (message.type === "auth_required")
@@ -179,7 +202,15 @@ export class HaWebSocketClient {
         this.pending.delete(id);
         reject(new SafeError("timeout", "WebSocket request timed out"));
       }, this.timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, {
+        resolve,
+        reject,
+        timer,
+        maximumBytes:
+          type === "hacs/repositories/list"
+            ? MAX_HACS_CATALOG_BYTES
+            : MAX_MESSAGE_BYTES,
+      });
       this.socket!.send(JSON.stringify({ id, type, ...input }));
     });
   }

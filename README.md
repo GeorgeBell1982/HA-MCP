@@ -16,7 +16,7 @@ and manual recovery use the local terminal operator.
 
 Start with the [current project context](docs/recovery.md#project-context-as-of-2026-10-02)
 for implemented capabilities, historical live acceptance, remaining gates, and
-resumption guidance. The source add-on version is `0.3.0`; deployment and acceptance
+resumption guidance. The source add-on version is `0.3.1`; deployment and acceptance
 evidence are recorded separately from source publication.
 
 Version `0.3.0` supports storage dashboard patches with source-drift checks, exact

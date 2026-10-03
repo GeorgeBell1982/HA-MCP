@@ -1735,3 +1735,22 @@ filesystem races and power-loss durability are unproven. Interrupted history mov
 may split retained records between active/archive storage, and archive terminal
 capacity is bounded. Actual production setup/provider authentication remains
 unverified. Source publication and deployment are recorded independently below.
+
+### Installed 0.3.0 acceptance and HACS catalog follow-up on 2026-10-03
+
+Commit c72c879 was pushed and source 0.3.0 installed through Supervisor's app update
+with a partial backup. enable_mcp_setup was enabled, setup_frontend_url set to the
+owner's LAN Home Assistant origin and only the MCP add-on restarted. A fresh real
+TLS/pinned bridge client listed all 36 tools and read Sunsynk through the MCP.
+Integration catalog returned 921 handlers; Supervisor app catalog returned 100 apps.
+The HACS read exposed a live compatibility issue: the configured 4,006-repository
+catalog is 2,699,670 bytes, exceeding the existing 512,000-byte WebSocket bound.
+No live setup operation was attempted.
+
+Source 0.3.1 raises only the exact pending hacs/repositories/list response bound to
+4 MiB. Other response IDs retain the existing bound even while HACS is pending.
+Three regressions cover a 2.7 MB catalog, unrelated oversized responses and the
+4 MiB ceiling. Fresh authoritative pnpm verify passed 53 files, 1,433 tests and
+16 platform-gated skips. Source mirror and diff checks passed. This patch changes
+response admission only; the earlier 29-row native amd64/Pi effect-path fixture
+acceptance applies to the unchanged dashboard effect implementation.
