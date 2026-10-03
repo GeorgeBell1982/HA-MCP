@@ -973,6 +973,30 @@ investigation stopped no process, changed no limits, restarted no service and
 made no live HA configuration change. The chat is again using effective `never`
 approval policy, so human prompt acceptance remains a separate unresolved gate.
 
+### Project-scoped MCP discovery on 2026-10-03
+
+The owner requested preventing unrelated chats from discovering HA tools.
+Official OpenAI documentation supports trusted project-scoped MCP configuration;
+no request-text conditional startup setting was established. The existing user
+server definition was preserved, changing only its `enabled` value to `false`.
+This trusted project's local `.codex/config.toml` overrides only that server's
+`enabled = true`, inheriting the bridge command, timeouts and credential-file
+references from user config. The machine-specific local override is Git-ignored
+and contains no credential or private path.
+
+Fresh installed CLI configuration inspection (`codex mcp get` with JSON parsed
+in memory) confirmed `enabled: true` in the HA project and `enabled: false` in
+the OS temporary directory outside the project. The STDIO transport remained
+selected in both scopes. This proves config resolution, not immediate adoption
+by every existing running chat. A deep comparison of the resolved configurations
+confirmed that only enablement differs; formatting, Git ignore and diff checks
+passed. An initial order-sensitive JSON string comparison was replaced with
+structural comparison because config object key order is not stable.
+No chat, bridge, desktop or Pi service was
+stopped or restarted. Unrelated loaded connections may remain until their normal
+config reload. Automatic discovery within the HA project remains possible;
+literal connect-only-after-an-HA-request behavior was not implemented or claimed.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.

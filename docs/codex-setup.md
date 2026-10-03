@@ -30,6 +30,26 @@ cannot leave the bridge process or server-side session indefinitely.
 Direct HTTP configuration is optional; local development can continue to use
 `dist/index.js` over stdio with a dedicated Home Assistant user/token.
 
+## Restrict discovery to the Home Assistant project
+
+Keep the machine-specific `[mcp_servers.home_assistant_engineering]` definition
+and its environment in user config, but set `enabled = false` there. In this
+trusted project's `.codex/config.toml`, override only:
+
+```toml
+[mcp_servers.home_assistant_engineering]
+enabled = true
+```
+
+The local config is ignored by Git because this override requires an existing
+machine-specific user definition. Codex merges the project override over the
+user definition, enabling this MCP only when loading this project's config.
+Other project chats keep it disabled. This is project scoping, not conditional
+discovery based on the wording of a request; chats inside this project may still
+discover its tools automatically. Existing running chats may retain their loaded
+connections until their MCP configuration reloads. Do not stop unrelated chats
+to force this change. See the [official MCP guide](https://learn.chatgpt.com/docs/extend/mcp?surface=app).
+
 ## Human approval for guarded application
 
 Add-on `0.2.3` can opt in with `enable_mcp_writes: true` alongside `enable_phase2`.
