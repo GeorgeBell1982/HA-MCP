@@ -1790,3 +1790,21 @@ client closed and its OS-temp script was removed. The top-gap save remains pendi
 human approval; source proposals expire 30 minutes after preparation/restart.
 The installed 0.3.1 image is
 sha256:7c3451b6cca2489f17236c02d8c5906decd3efd868cf0feb6a9feab3412cc719.
+
+### Human-approved Sunsynk dashboard save on 2026-10-03
+
+The owner explicitly approved proposal 02458c00-ca2d-4394-94b2-7d0dd1081708 in this
+chat. The temporary trusted client relayed that answer only after checking the
+originating MCP form's exact proposal ID, dashboard summary and confirmation.
+ha_apply_change returned verified (request 68e0858b-a5cd-473a-a886-1f19245c004e),
+and a separate ha_get_dashboard read confirmed the exact approved card_mod style
+on /views/0/cards/0:
+`:host { padding-top: var(--vertical-stack-card-gap, var(--stack-card-gap, 8px)); box-sizing: border-box; }`.
+Source hash changed from
+221e40ee029ec77dfd4ed82c180b4972352246e9c2c0ce200aa53b9faec0a3e9 to
+0451f1fc09be88f8015698da1ff155d107cf4be17779cf433088760f9e34fb5f.
+The MCP retained its protected checkpoint and reported homeAssistantRestarted:false.
+The effect was a single dashboard save, with no Core restart or installation.
+The client closed and its OS-temp adapter was removed. Actual browser pixel/layout
+verification remains unperformed because the available browser is at HA login;
+configuration read-back is verified, rather than a visual rendering claim.

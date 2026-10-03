@@ -237,3 +237,11 @@ and setup are enabled, and setup_frontend_url is the owner's LAN HA origin. Live
 reads prove 36 MCP tools plus integration/HACS/Supervisor catalogs (921/4006/100).
 The requested Sunsynk top-gap proposal is awaiting exact human approval in chat;
 no dashboard save or third-party install has been performed at this checkpoint.
+
+### Sunsynk top gap applied
+
+The owner approved the exact Sunsynk top-gap proposal in chat on 2026-10-03.
+The MCP applied proposal 02458c00-ca2d-4394-94b2-7d0dd1081708 once and verified it;
+a separate dashboard read confirmed the approved card_mod top padding using the
+existing stack-gap variable (8 px fallback). No restart occurred. This supersedes
+the earlier awaiting-approval checkpoint. Browser rendering remains unverified.
