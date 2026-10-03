@@ -932,6 +932,47 @@ Codex settings, then repeat the harmless human approval check. No process was
 stopped and no Home Assistant configuration changed. Human UI acceptance remains
 unverified.
 
+### HTTP 429 investigation on 2026-10-03
+
+The owner clarified that the other busy chat is working on an unrelated task,
+not the HA MCP. Its task must not be treated as evidence of HA tool traffic.
+Read-only inspection of the deployed Node environment confirmed
+`HA_MAX_SESSIONS_PER_CLIENT=2`. Source has three separate rejection gates, all
+returning an empty HTTP `429`: four concurrent HTTP requests per paired client,
+120 HTTP requests per minute per paired client, and session admission (two per
+paired client, sixteen globally). Long-lived HTTP responses count toward
+concurrency; these are protocol requests and sessions, not just tool invocations.
+
+At inspection, three local bridge processes were present (PIDs `6980`, `171232`
+and `182916`). Desktop logs show engineering MCP startup in several distinct
+chats and separate background extension discovery failures. A process alone does
+not prove a successfully admitted remote session or current HA tool use.
+Authenticated, certificate-pinned protocol probes used only `ping`, without
+initializing a new session: an unknown session ID returned `404`, followed by a
+sessionless request returning `429`. The first request passed the concurrency
+and minute-rate gates; the second result points to session admission, subject to
+concurrent external traffic changing those counters between the probes. The
+empty rejection response cannot distinguish per-client from global session
+capacity or identify slot owners. No server-side counter telemetry exists here.
+
+An actual current-chat `ha_get_system_info` succeeded, request ID
+`bbc88aa6-53ea-40c1-88d1-0e890aff8b7f`, demonstrating that an existing connection
+can work while additional discovery is refused. The existing focused transport
+test passed freshly: two sessions admitted, third initialization `429`, cleanup
+and expiry behavior checked (one selected test passed, three unrelated tests
+skipped). Thus a session-capacity explanation is supported; excessive HA calls
+by the unrelated agent are not established.
+
+Recommendation: distinguish the rejection gates with sanitized diagnostics and
+appropriate retry timing; allow a fresh, bounded connection attempt after a
+failed initial bridge connection rather than retaining its rejected promise
+forever. Preserve the prohibition on replaying mutations. Consider a bounded
+session-cap adjustment only after measuring Codex's actual connection needs;
+raising the request-per-minute limit is not supported by this evidence. This
+investigation stopped no process, changed no limits, restarted no service and
+made no live HA configuration change. The chat is again using effective `never`
+approval policy, so human prompt acceptance remains a separate unresolved gate.
+
 ## Objective
 
 Build a standalone, production-quality TypeScript MCP server that complements Home Assistant's official MCP server by providing bounded, auditable configuration inspection and a staged, validated, reversible mutation workflow without exposing generic shell, arbitrary file writes, secrets, or unrestricted service calls.
